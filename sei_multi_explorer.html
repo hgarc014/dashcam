@@ -1397,8 +1397,6 @@
 
         async function recordFrames(start, end, totalFrames) {
             const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
-            const targetFPS = 30;
-            const frameDelay = 1000 / targetFPS;
             let lastProgressUpdate = 0;
             const progressUpdateInterval = isMobile ? 1000 : 100;
             let startTime = performance.now();
@@ -1409,13 +1407,20 @@
                 currentFrameIndex = i;
                 slider.value = i;
                 
-                // Render the frame to canvas
+                // Render the frame to canvas (takes as long as needed)
                 await showFrame(i);
                 
+                // Wait for the canvas to fully paint the frame
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                
                 // Manually request frame capture from stream
+                // Each frame is captured in sequence regardless of processing time
                 if (window.exportStream && window.exportStream.requestFrame) {
                     window.exportStream.requestFrame();
                 }
+                
+                // Give the stream a moment to capture the frame
+                await new Promise(resolve => requestAnimationFrame(resolve));
 
                 // Update progress display less frequently to reduce overhead
                 const now = performance.now();
@@ -1426,16 +1431,6 @@
                     const fps = framesProcessed / elapsed;
                     exportStatus.textContent = `Exporting: ${progress}% (${framesProcessed}/${totalFrames}) ${fps.toFixed(1)} fps`;
                     lastProgressUpdate = now;
-                }
-
-                // Pace frame delivery to match target FPS (30 FPS = ~33ms per frame)
-                // This ensures smooth playback without rushing or lagging
-                const expectedTime = ((i - start + 1) * frameDelay);
-                const actualTime = performance.now() - startTime;
-                const timeToWait = Math.max(0, expectedTime - actualTime);
-                
-                if (timeToWait > 0) {
-                    await new Promise(resolve => setTimeout(resolve, timeToWait));
                 }
             }
             

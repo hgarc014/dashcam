@@ -532,7 +532,8 @@
                     width: config.width / 2,
                     height: config.height / 2,
                     scale: 0.5,
-                    visible: true
+                    visible: true,
+                    zIndex: videos.length
                 };
 
                 videos.push(videoObj);
@@ -638,18 +639,29 @@
             const totalSec = Math.floor(slider.max / 30) % 60;
             timeDisplay.textContent = `${currentMin}:${currentSec.toString().padStart(2, '0')} / ${totalMin}:${totalSec.toString().padStart(2, '0')}`;
 
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+            const sortedVideos = [...videos].sort((a, b) => a.zIndex - b.zIndex);
+            const decodedFrames = [];
             let currentSei = null;
-            for (const video of videos) {
+
+            for (const video of sortedVideos) {
                 if (!video.visible) continue;
                 const frameIdx = Math.min(index, video.frames.length - 1);
-                await decodeAndDrawFrame(video, frameIdx);
+                const frame = await decodeFrame(video, frameIdx);
+                if (frame) {
+                    decodedFrames.push({ video, frame });
+                }
                 
                 if (!currentSei && video.frames[frameIdx].sei) {
                     currentSei = video.frames[frameIdx].sei;
                 }
+            }
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            for (const { video, frame } of decodedFrames) {
+                ctx.drawImage(frame, video.x, video.y, video.width, video.height);
+                frame.close();
             }
 
             if (currentSei) {
@@ -666,11 +678,11 @@
             }
         }
 
-        async function decodeAndDrawFrame(video, frameIdx) {
+        async function decodeFrame(video, frameIdx) {
             try {
                 let keyIdx = frameIdx;
                 while (keyIdx >= 0 && !video.frames[keyIdx].keyframe) keyIdx--;
-                if (keyIdx < 0) return;
+                if (keyIdx < 0) return null;
 
                 if (video.decoder) {
                     try { video.decoder.close(); } catch {}
@@ -678,14 +690,16 @@
 
                 let count = 0;
                 const target = frameIdx - keyIdx + 1;
+                let targetFrame = null;
 
                 await new Promise((resolve, reject) => {
                     video.decoder = new VideoDecoder({
                         output: (frame) => {
                             if (++count === target) {
-                                ctx.drawImage(frame, video.x, video.y, video.width, video.height);
+                                targetFrame = frame;
+                            } else {
+                                frame.close();
                             }
-                            frame.close();
                             if (count >= target) resolve();
                         },
                         error: reject
@@ -703,8 +717,10 @@
                     video.decoder.flush().catch(reject);
                 });
 
+                return targetFrame;
             } catch (err) {
                 console.error('Decode error:', err);
+                return null;
             }
         }
 
@@ -839,14 +855,21 @@
             const x = (e.clientX - rect.left) * scaleX;
             const y = (e.clientY - rect.top) * scaleY;
 
-            for (let i = videos.length - 1; i >= 0; i--) {
-                const v = videos[i];
+            const sortedVideos = [...videos].sort((a, b) => b.zIndex - a.zIndex);
+            
+            for (const v of sortedVideos) {
                 if (!v.visible) continue;
                 if (x >= v.x && x <= v.x + v.width && y >= v.y && y <= v.y + v.height) {
                     draggedVideo = v;
                     dragOffsetX = x - v.x;
                     dragOffsetY = y - v.y;
                     canvas.style.cursor = 'move';
+                    
+                    const maxZ = Math.max(...videos.map(vid => vid.zIndex));
+                    if (v.zIndex < maxZ) {
+                        v.zIndex = maxZ + 1;
+                        showFrame(currentFrameIndex);
+                    }
                     break;
                 }
             }

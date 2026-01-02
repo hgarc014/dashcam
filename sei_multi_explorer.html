@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tesla Dashcam Multi-View Explorer</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #ffffff;
+            --bg-panel: #f5f5f5;
+            --text: #1a1a1a;
+            --text-muted: #666666;
+            --accent: #0080ff;
+            --accent-hover: #0099ff;
+            --border: #888888;
+            --drop-hover-bg: #e8f4ff;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1a1a1a;
+                --bg-panel: #252525;
+                --text: #e8e8e8;
+                --text-muted: #999999;
+                --accent: rgb(255, 0, 51);
+                --accent-hover: rgb(200, 0, 40);
+                --border: #666666;
+                --drop-hover-bg: #291818;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+        }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.4;
+        }
+
+        a {
+            color: var(--accent);
+        }
+
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 1rem;
+            gap: 0.75rem;
+        }
+
+        .header {
+            flex-shrink: 0;
+        }
+
+        .header .nav {
+            font-size: 0.85rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .header h1 {
+            font-size: 1.4rem;
+            margin-bottom: 0.125rem;
+        }
+
+        .header .subtitle {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .main {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            gap: 1rem;
+        }
+
+        .video-section {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .canvas-container {
+            flex: 1;
+            min-height: 0;
+            background: #000;
+            border-radius: 8px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .canvas-container canvas {
+            max-width: 100%;
+            max-height: 100%;
+            display: block;
+        }
+
+        .drop-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 0.5rem;
+            background: var(--bg-panel);
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .drop-overlay.hidden {
+            display: none;
+        }
+
+        .drop-overlay:hover,
+        .drop-overlay.dragover {
+            background: var(--drop-hover-bg);
+            border-color: var(--accent);
+        }
+
+        .drop-overlay p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .drop-overlay input {
+            display: none;
+        }
+
+        .scrubber {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg-panel);
+            border-radius: 6px;
+            height: 44px;
+        }
+
+        .scrubber button {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: var(--accent);
+            color: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s, opacity 0.15s;
+        }
+
+        .scrubber button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        .scrubber button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .scrubber button svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
+        .scrubber input[type="range"] {
+            flex: 1;
+            height: 4px;
+            cursor: pointer;
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            padding: 12px 0;
+            margin: -12px 0;
+        }
+
+        .scrubber input[type="range"]::-webkit-slider-runnable-track {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+        }
+
+        .scrubber input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            background: var(--accent);
+            border-radius: 50%;
+            margin-top: -5px;
+            cursor: pointer;
+        }
+
+        .scrubber input[type="range"]::-moz-range-track {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+        }
+
+        .scrubber input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: var(--accent);
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .scrubber input[type="range"]:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .control-section {
+            width: 320px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border-radius: 6px;
+            padding: 0.75rem;
+        }
+
+        .panel h3 {
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        .video-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .video-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem;
+            background: var(--bg);
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .video-item .name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .video-item button {
+            padding: 0.25rem 0.5rem;
+            border: none;
+            border-radius: 3px;
+            background: var(--accent);
+            color: #fff;
+            font-size: 0.7rem;
+            cursor: pointer;
+        }
+
+        .video-item button:hover {
+            background: var(--accent-hover);
+        }
+
+        .layout-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .layout-controls label {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            font-size: 0.8rem;
+        }
+
+        .layout-controls input,
+        .layout-controls select {
+            padding: 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.8rem;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn {
+            flex: 1;
+            height: 44px;
+            padding: 0 0.75rem;
+            border: none;
+            border-radius: 6px;
+            background: var(--accent);
+            color: #fff;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, opacity 0.15s;
+        }
+
+        .btn:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: var(--bg-panel);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--bg);
+        }
+
+        .export-status {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-align: center;
+            margin-top: 0.25rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <header class="header">
+            <p class="nav"><a href="index.html">← Back to Dashcam Tools</a></p>
+            <h1>Tesla Dashcam Multi-View Explorer</h1>
+            <p class="subtitle">View multiple dashcam perspectives with synchronized playback and exportable overlays.</p>
+        </header>
+
+        <main class="main">
+            <section class="video-section">
+                <div class="canvas-container">
+                    <div class="drop-overlay" id="dropOverlay">
+                        <input type="file" id="fileInput" accept="video/mp4" multiple>
+                        <p>Drop MP4 files here or click to select</p>
+                        <p style="font-size: 0.75rem;">Select multiple files for different perspectives</p>
+                    </div>
+                    <canvas id="canvas"></canvas>
+                </div>
+                <div class="scrubber">
+                    <button id="playBtn" title="Play/Pause" disabled>
+                        <svg viewBox="0 0 24 24">
+                            <polygon points="6,4 20,12 6,20" />
+                        </svg>
+                    </button>
+                    <input type="range" id="slider" min="0" max="0" value="0" disabled>
+                    <span id="timeDisplay" style="font-size: 0.75rem; color: var(--text-muted); min-width: 60px; text-align: right;">0:00 / 0:00</span>
+                </div>
+            </section>
+
+            <aside class="control-section">
+                <div class="panel">
+                    <h3>LOADED VIDEOS</h3>
+                    <div class="video-list" id="videoList">
+                        <p style="color: var(--text-muted); font-size: 0.8rem;">No videos loaded</p>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>LAYOUT</h3>
+                    <div class="layout-controls">
+                        <label>
+                            Canvas Size
+                            <select id="canvasSizeSelect">
+                                <option value="1920x1080">1920 × 1080 (Full HD)</option>
+                                <option value="2560x1440">2560 × 1440 (2K)</option>
+                                <option value="3840x2160">3840 × 2160 (4K)</option>
+                                <option value="1280x720">1280 × 720 (HD)</option>
+                            </select>
+                        </label>
+                        <button class="btn btn-secondary" id="applyLayoutBtn" disabled>Apply Layout</button>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-secondary" id="resetLayoutBtn" disabled>Reset Layout</button>
+                    <button class="btn" id="exportBtn" disabled>Export Video</button>
+                </div>
+                <div class="export-status" id="exportStatus"></div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="vendor/protobuf.min.js"></script>
+    <script src="vendor/jszip.min.js"></script>
+    <script src="dashcam-mp4.js"></script>
+    <script src="sei_canvas_hud.js"></script>
+    <script>
+        let seiType = null, seiFields = null;
+        let videos = [];
+        let currentFrameIndex = 0;
+        let playing = false, playTimer = null;
+        let hudRenderer = new SeiCanvasHud();
+        let mediaRecorder = null;
+        let recordedChunks = [];
+
+        const $ = id => document.getElementById(id);
+        const dropOverlay = $('dropOverlay'), fileInput = $('fileInput');
+        const canvas = $('canvas'), ctx = canvas.getContext('2d');
+        const slider = $('slider'), playBtn = $('playBtn'), exportBtn = $('exportBtn');
+        const videoList = $('videoList'), canvasSizeSelect = $('canvasSizeSelect');
+        const applyLayoutBtn = $('applyLayoutBtn'), resetLayoutBtn = $('resetLayoutBtn');
+        const timeDisplay = $('timeDisplay'), exportStatus = $('exportStatus');
+
+        dropOverlay.onclick = () => fileInput.click();
+        fileInput.onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
+        document.ondragover = e => { e.preventDefault(); dropOverlay.classList.add('dragover'); };
+        document.ondragleave = e => { if (!e.relatedTarget) dropOverlay.classList.remove('dragover'); };
+        document.ondrop = async e => {
+            e.preventDefault();
+            dropOverlay.classList.remove('dragover');
+            const items = e.dataTransfer?.items;
+            if (items) {
+                const { files } = await DashcamHelpers.getFilesFromDataTransfer(items);
+                handleFiles(files);
+            } else {
+                handleFiles(e.dataTransfer?.files ?? []);
+            }
+        };
+        slider.oninput = () => { pause(); showFrame(+slider.value); };
+        playBtn.onclick = () => playing ? pause() : play();
+        document.onkeydown = e => {
+            if (!videos.length) return;
+            if (e.key === ' ') {
+                e.preventDefault(); playing ? pause() : play();
+            } else if (e.key === 'ArrowLeft' && currentFrameIndex > 0) {
+                e.preventDefault(); pause(); currentFrameIndex--; slider.value = currentFrameIndex; showFrame(currentFrameIndex);
+            } else if (e.key === 'ArrowRight' && currentFrameIndex < slider.max) {
+                e.preventDefault(); pause(); currentFrameIndex++; slider.value = currentFrameIndex; showFrame(currentFrameIndex);
+            }
+        };
+
+        canvasSizeSelect.onchange = () => applyCanvasSize();
+        applyLayoutBtn.onclick = () => applyLayout();
+        resetLayoutBtn.onclick = () => resetLayout();
+        exportBtn.onclick = () => startExport();
+
+        DashcamHelpers.initProtobuf().then(({ SeiMetadata, enumFields }) => {
+            seiType = SeiMetadata;
+            seiFields = DashcamHelpers.deriveFieldInfo(SeiMetadata, enumFields, { useLabels: true });
+        }).catch(err => console.error('Protobuf init failed:', err));
+
+        function applyCanvasSize() {
+            const [w, h] = canvasSizeSelect.value.split('x').map(Number);
+            canvas.width = w;
+            canvas.height = h;
+            if (videos.length) showFrame(currentFrameIndex);
+        }
+
+        async function handleFiles(fileList) {
+            if (!seiType) await DashcamHelpers.initProtobuf().then(({ SeiMetadata, enumFields }) => {
+                seiType = SeiMetadata;
+                seiFields = DashcamHelpers.deriveFieldInfo(SeiMetadata, enumFields, { useLabels: true });
+            });
+
+            const files = (Array.isArray(fileList) ? fileList : Array.from(fileList))
+                .filter(f => f.name.toLowerCase().endsWith('.mp4'));
+            if (!files.length) { alert('Please choose at least one MP4 file.'); return; }
+
+            for (const file of files) {
+                await loadVideo(file);
+            }
+
+            if (videos.length) {
+                applyCanvasSize();
+                setupControls();
+                dropOverlay.classList.add('hidden');
+            }
+        }
+
+        async function loadVideo(file) {
+            try {
+                const mp4 = new DashcamMP4(await file.arrayBuffer());
+                const frames = mp4.parseFrames(seiType);
+                const firstKeyframe = frames.findIndex(f => f.keyframe);
+                if (firstKeyframe === -1) throw new Error('No keyframes found');
+
+                const config = mp4.getConfig();
+
+                const videoObj = {
+                    id: Date.now() + Math.random(),
+                    name: file.name,
+                    mp4,
+                    frames,
+                    config,
+                    decoder: null,
+                    firstKeyframe,
+                    x: videos.length * 50,
+                    y: videos.length * 50,
+                    width: config.width / 2,
+                    height: config.height / 2,
+                    scale: 0.5,
+                    visible: true
+                };
+
+                videos.push(videoObj);
+                updateVideoList();
+            } catch (err) {
+                alert(`Failed to load ${file.name}: ${err.message}`);
+            }
+        }
+
+        function updateVideoList() {
+            if (!videos.length) {
+                videoList.innerHTML = '<p style="color: var(--text-muted); font-size: 0.8rem;">No videos loaded</p>';
+                return;
+            }
+
+            videoList.innerHTML = videos.map((v, i) => `
+                <div class="video-item">
+                    <input type="checkbox" ${v.visible ? 'checked' : ''} onchange="toggleVideo(${i})" style="margin: 0;">
+                    <span class="name" title="${v.name}">${v.name}</span>
+                    <button onclick="removeVideo(${i})">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        function toggleVideo(index) {
+            videos[index].visible = !videos[index].visible;
+            showFrame(currentFrameIndex);
+        }
+
+        function removeVideo(index) {
+            if (videos[index].decoder) {
+                try { videos[index].decoder.close(); } catch {}
+            }
+            videos.splice(index, 1);
+            updateVideoList();
+            if (!videos.length) {
+                resetApp();
+            } else {
+                showFrame(currentFrameIndex);
+            }
+        }
+
+        function setupControls() {
+            const maxFrames = Math.max(...videos.map(v => v.frames.length));
+            slider.max = maxFrames - 1;
+            slider.value = 0;
+            currentFrameIndex = 0;
+            slider.disabled = false;
+            playBtn.disabled = false;
+            exportBtn.disabled = false;
+            applyLayoutBtn.disabled = false;
+            resetLayoutBtn.disabled = false;
+            showFrame(0);
+        }
+
+        function resetApp() {
+            videos = [];
+            currentFrameIndex = 0;
+            slider.max = 0;
+            slider.value = 0;
+            slider.disabled = true;
+            playBtn.disabled = true;
+            exportBtn.disabled = true;
+            applyLayoutBtn.disabled = true;
+            resetLayoutBtn.disabled = true;
+            dropOverlay.classList.remove('hidden');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            updateVideoList();
+        }
+
+        function play() {
+            if (!videos.length || playing) return;
+            playing = true;
+            playBtn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="5" y="4" width="4" height="16"/><rect x="15" y="4" width="4" height="16"/></svg>';
+            playNext();
+        }
+
+        function pause() {
+            playing = false;
+            playBtn.innerHTML = '<svg viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20"/></svg>';
+            if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+        }
+
+        function playNext() {
+            if (!playing) return;
+            currentFrameIndex++;
+            if (currentFrameIndex >= slider.max) {
+                pause();
+                return;
+            }
+            slider.value = currentFrameIndex;
+            showFrame(currentFrameIndex);
+            playTimer = setTimeout(playNext, 33);
+        }
+
+        async function showFrame(index) {
+            currentFrameIndex = index;
+            
+            const totalSeconds = Math.floor(index / 30);
+            const currentMin = Math.floor(totalSeconds / 60);
+            const currentSec = totalSeconds % 60;
+            const totalMin = Math.floor(slider.max / 30 / 60);
+            const totalSec = Math.floor(slider.max / 30) % 60;
+            timeDisplay.textContent = `${currentMin}:${currentSec.toString().padStart(2, '0')} / ${totalMin}:${totalSec.toString().padStart(2, '0')}`;
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            let currentSei = null;
+            for (const video of videos) {
+                if (!video.visible) continue;
+                const frameIdx = Math.min(index, video.frames.length - 1);
+                await decodeAndDrawFrame(video, frameIdx);
+                
+                if (!currentSei && video.frames[frameIdx].sei) {
+                    currentSei = video.frames[frameIdx].sei;
+                }
+            }
+
+            if (currentSei) {
+                let fields = {};
+                for (const { propName, label, enumMap } of seiFields) {
+                    const value = currentSei?.[propName];
+                    const displayValue = value != null ? DashcamHelpers.formatValue(value, enumMap) : '—';
+                    fields[propName] = { value, displayValue };
+                }
+                const telemetry = { ...currentSei, fields };
+                const hudX = canvas.width / 2 - 160;
+                const hudY = 20;
+                hudRenderer.render(ctx, telemetry, hudX, hudY, 1.0);
+            }
+        }
+
+        async function decodeAndDrawFrame(video, frameIdx) {
+            try {
+                let keyIdx = frameIdx;
+                while (keyIdx >= 0 && !video.frames[keyIdx].keyframe) keyIdx--;
+                if (keyIdx < 0) return;
+
+                if (video.decoder) {
+                    try { video.decoder.close(); } catch {}
+                }
+
+                let count = 0;
+                const target = frameIdx - keyIdx + 1;
+
+                await new Promise((resolve, reject) => {
+                    video.decoder = new VideoDecoder({
+                        output: (frame) => {
+                            if (++count === target) {
+                                ctx.drawImage(frame, video.x, video.y, video.width, video.height);
+                            }
+                            frame.close();
+                            if (count >= target) resolve();
+                        },
+                        error: reject
+                    });
+
+                    video.decoder.configure({ 
+                        codec: video.config.codec, 
+                        codedWidth: video.config.width, 
+                        codedHeight: video.config.height 
+                    });
+
+                    for (let i = keyIdx; i <= frameIdx; i++) {
+                        video.decoder.decode(createChunk(video.frames[i], video.config));
+                    }
+                    video.decoder.flush().catch(reject);
+                });
+
+            } catch (err) {
+                console.error('Decode error:', err);
+            }
+        }
+
+        function createChunk(frame, config) {
+            const sc = new Uint8Array([0, 0, 0, 1]);
+            const data = frame.keyframe
+                ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
+                : DashcamMP4.concat(sc, frame.data);
+            return new EncodedVideoChunk({ 
+                type: frame.keyframe ? 'key' : 'delta', 
+                timestamp: frame.index * 33333, 
+                data 
+            });
+        }
+
+        function applyLayout() {
+            if (!videos.length) return;
+            
+            const cols = Math.ceil(Math.sqrt(videos.length));
+            const rows = Math.ceil(videos.length / cols);
+            const cellWidth = canvas.width / cols;
+            const cellHeight = canvas.height / rows;
+
+            videos.forEach((video, i) => {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                
+                const aspectRatio = video.config.width / video.config.height;
+                let width = cellWidth - 20;
+                let height = width / aspectRatio;
+                
+                if (height > cellHeight - 20) {
+                    height = cellHeight - 20;
+                    width = height * aspectRatio;
+                }
+
+                video.x = col * cellWidth + (cellWidth - width) / 2;
+                video.y = row * cellHeight + (cellHeight - height) / 2;
+                video.width = width;
+                video.height = height;
+                video.scale = width / video.config.width;
+            });
+
+            showFrame(currentFrameIndex);
+        }
+
+        function resetLayout() {
+            videos.forEach((video, i) => {
+                video.x = i * 50;
+                video.y = i * 50;
+                video.width = video.config.width / 2;
+                video.height = video.config.height / 2;
+                video.scale = 0.5;
+            });
+            showFrame(currentFrameIndex);
+        }
+
+        async function startExport() {
+            if (!videos.length || mediaRecorder) return;
+
+            try {
+                exportBtn.disabled = true;
+                exportStatus.textContent = 'Preparing export...';
+
+                const stream = canvas.captureStream(30);
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'video/webm;codecs=vp9',
+                    videoBitsPerSecond: 8000000
+                });
+
+                recordedChunks = [];
+                mediaRecorder.ondataavailable = e => {
+                    if (e.data.size > 0) recordedChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `dashcam_export_${Date.now()}.webm`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    
+                    exportStatus.textContent = 'Export complete!';
+                    exportBtn.disabled = false;
+                    mediaRecorder = null;
+                    setTimeout(() => { exportStatus.textContent = ''; }, 3000);
+                };
+
+                mediaRecorder.start();
+                exportStatus.textContent = 'Recording... (playing through timeline)';
+
+                pause();
+                currentFrameIndex = 0;
+                slider.value = 0;
+                
+                await recordFrames();
+                
+                mediaRecorder.stop();
+                
+            } catch (err) {
+                alert(`Export failed: ${err.message}`);
+                exportStatus.textContent = 'Export failed';
+                exportBtn.disabled = false;
+                mediaRecorder = null;
+            }
+        }
+
+        async function recordFrames() {
+            for (let i = 0; i <= slider.max; i++) {
+                if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
+                
+                currentFrameIndex = i;
+                slider.value = i;
+                await showFrame(i);
+                exportStatus.textContent = `Recording frame ${i + 1} / ${slider.max + 1}`;
+                
+                await new Promise(resolve => setTimeout(resolve, 33));
+            }
+        }
+
+        canvas.addEventListener('mousedown', handleCanvasMouseDown);
+        let draggedVideo = null;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+
+        function handleCanvasMouseDown(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+
+            for (let i = videos.length - 1; i >= 0; i--) {
+                const v = videos[i];
+                if (!v.visible) continue;
+                if (x >= v.x && x <= v.x + v.width && y >= v.y && y <= v.y + v.height) {
+                    draggedVideo = v;
+                    dragOffsetX = x - v.x;
+                    dragOffsetY = y - v.y;
+                    canvas.style.cursor = 'move';
+                    break;
+                }
+            }
+        }
+
+        canvas.addEventListener('mousemove', handleCanvasMouseMove);
+        function handleCanvasMouseMove(e) {
+            if (!draggedVideo) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+
+            draggedVideo.x = Math.max(0, Math.min(canvas.width - draggedVideo.width, x - dragOffsetX));
+            draggedVideo.y = Math.max(0, Math.min(canvas.height - draggedVideo.height, y - dragOffsetY));
+            
+            showFrame(currentFrameIndex);
+        }
+
+        canvas.addEventListener('mouseup', handleCanvasMouseUp);
+        canvas.addEventListener('mouseleave', handleCanvasMouseUp);
+        function handleCanvasMouseUp() {
+            if (draggedVideo) {
+                draggedVideo = null;
+                canvas.style.cursor = 'default';
+            }
+        }
+    </script>
+</body>
+
+</html>

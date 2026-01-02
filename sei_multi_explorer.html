@@ -1388,7 +1388,7 @@
                 }
                 
                 const avgDelta = (deltaX + deltaY) / 2;
-                const newScale = Math.max(0.1, Math.min(3.0, initialVideoScale + avgDelta / 200));
+                const newScale = Math.max(0.1, Math.min(3.0, initialVideoScale + avgDelta / 400));
                 selectedVideo.scale = newScale;
                 selectedVideo.width = selectedVideo.config.width * newScale;
                 selectedVideo.height = selectedVideo.config.height * newScale;
@@ -1427,8 +1427,39 @@
             const wasHoveringHud = isHoveringHud;
             isHoveringHud = false;
             let cornerHover = false;
+            let cursorSet = false;
             
-            if (hudVisible && hudX !== null && hudY !== null) {
+            // Check video resize handles first
+            if (selectedVideo) {
+                const handleSize = 12;
+                const videoCorners = {
+                    'tl': { x: selectedVideo.x - 5, y: selectedVideo.y - 5, cursor: 'nwse-resize' },
+                    'tr': { x: selectedVideo.x + selectedVideo.width + 5 - handleSize, y: selectedVideo.y - 5, cursor: 'nesw-resize' },
+                    'bl': { x: selectedVideo.x - 5, y: selectedVideo.y + selectedVideo.height + 5 - handleSize, cursor: 'nesw-resize' },
+                    'br': { x: selectedVideo.x + selectedVideo.width + 5 - handleSize, y: selectedVideo.y + selectedVideo.height + 5 - handleSize, cursor: 'nwse-resize' }
+                };
+                
+                for (const [corner, pos] of Object.entries(videoCorners)) {
+                    if (x >= pos.x && x <= pos.x + handleSize && y >= pos.y && y <= pos.y + handleSize) {
+                        canvas.style.cursor = pos.cursor;
+                        cursorSet = true;
+                        break;
+                    }
+                }
+                
+                // Check rotation handle
+                if (!cursorSet) {
+                    const rotHandleX = selectedVideo.x + selectedVideo.width / 2;
+                    const rotHandleY = selectedVideo.y - 30;
+                    const dist = Math.sqrt((x - rotHandleX) ** 2 + (y - rotHandleY) ** 2);
+                    if (dist <= 8) {
+                        canvas.style.cursor = 'grab';
+                        cursorSet = true;
+                    }
+                }
+            }
+            
+            if (!cursorSet && hudVisible && hudX !== null && hudY !== null) {
                 const handleSize = 12;
                 const corners = {
                     'tl': { x: hudX - 5, y: hudY - 5, cursor: 'nwse-resize' },
@@ -1442,6 +1473,7 @@
                         canvas.style.cursor = pos.cursor;
                         cornerHover = true;
                         isHoveringHud = true;
+                        cursorSet = true;
                         break;
                     }
                 }
@@ -1449,10 +1481,11 @@
                 if (!cornerHover && x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight) {
                     canvas.style.cursor = 'move';
                     isHoveringHud = true;
+                    cursorSet = true;
                 }
             }
             
-            if (!isHoveringHud && !cornerHover) {
+            if (!cursorSet) {
                 canvas.style.cursor = 'default';
             }
 

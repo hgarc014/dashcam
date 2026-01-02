@@ -169,6 +169,12 @@
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText("Self-Driving", cx, 155);
+      } else {
+        ctx.font = "600 26px -apple-system, system-ui, sans-serif";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("Human", cx, 155);
       }
     }
 

@@ -1000,12 +1000,20 @@
 
             let currentVideoTimestamp = null;
             
+            // Decode videos sequentially to reduce memory pressure
             for (const video of sortedVideos) {
                 if (!video.visible) continue;
                 const frameIdx = Math.min(index, video.frames.length - 1);
-                const frame = await decodeFrame(video, frameIdx);
-                if (frame) {
-                    decodedFrames.push({ video, frame });
+                
+                try {
+                    const frame = await decodeFrame(video, frameIdx);
+                    if (frame) {
+                        decodedFrames.push({ video, frame });
+                    } else {
+                        console.warn(`Failed to decode frame ${frameIdx} for video ${video.name}`);
+                    }
+                } catch (err) {
+                    console.error(`Error decoding video ${video.name}:`, err);
                 }
 
                 if (!currentSei && video.frames[frameIdx].sei) {
@@ -1150,54 +1158,94 @@
                 while (keyIdx >= 0 && !video.frames[keyIdx].keyframe) keyIdx--;
                 if (keyIdx < 0) return null;
 
-                if (video.decoder) {
+                // Check if we can reuse the decoder (sequential playback optimization)
+                const needsNewDecoder = !video.decoder || 
+                                       video.lastDecodedFrame === undefined ||
+                                       video.lastDecodedFrame > frameIdx || 
+                                       (frameIdx - video.lastDecodedFrame) > 10;
+
+                if (needsNewDecoder && video.decoder) {
                     try { 
                         await video.decoder.flush().catch(() => {});
                         video.decoder.close(); 
                     } catch {}
                     video.decoder = null;
+                    video.lastDecodedFrame = undefined;
                 }
 
-                let count = 0;
-                const target = frameIdx - keyIdx + 1;
+                // Determine which frames to decode
+                let startIdx = keyIdx;
+                if (!needsNewDecoder && video.lastDecodedFrame !== undefined) {
+                    startIdx = video.lastDecodedFrame + 1;
+                }
+
                 let targetFrame = null;
                 let decodeError = null;
+                let frameCount = 0;
+                const targetCount = frameIdx - startIdx + 1;
 
-                await new Promise((resolve, reject) => {
-                    video.decoder = new VideoDecoder({
-                        output: (frame) => {
-                            if (++count === target) {
-                                targetFrame = frame;
-                            } else {
-                                frame.close();
+                return await new Promise((resolve) => {
+                    if (!video.decoder) {
+                        video.decoder = new VideoDecoder({
+                            output: (frame) => {
+                                frameCount++;
+                                if (frameCount === targetCount) {
+                                    targetFrame = frame;
+                                    resolve(frame);
+                                } else {
+                                    frame.close();
+                                }
+                            },
+                            error: (err) => {
+                                decodeError = err;
+                                console.error('VideoDecoder error:', err);
+                                if (video.decoder) {
+                                    try { video.decoder.close(); } catch {}
+                                    video.decoder = null;
+                                    video.lastDecodedFrame = undefined;
+                                }
+                                resolve(null);
                             }
-                            if (count >= target) resolve();
-                        },
-                        error: (err) => {
-                            decodeError = err;
-                            resolve();
-                        }
-                    });
+                        });
 
-                    video.decoder.configure({
-                        codec: video.config.codec,
-                        codedWidth: video.config.width,
-                        codedHeight: video.config.height
-                    });
+                        video.decoder.configure({
+                            codec: video.config.codec,
+                            codedWidth: video.config.width,
+                            codedHeight: video.config.height
+                        });
+                    }
 
-                    for (let i = keyIdx; i <= frameIdx; i++) {
+                    // Decode frames
+                    for (let i = startIdx; i <= frameIdx; i++) {
                         video.decoder.decode(createChunk(video.frames[i], video.config));
                     }
-                    video.decoder.flush().catch(() => resolve());
+
+                    video.decoder.flush().then(() => {
+                        video.lastDecodedFrame = frameIdx;
+                        if (!targetFrame) {
+                            console.warn(`Flush completed but no frame decoded for ${video.name}`);
+                            resolve(null);
+                        }
+                    }).catch((err) => {
+                        console.error('Flush error:', err);
+                        resolve(null);
+                    });
+
+                    // Timeout fallback
+                    setTimeout(() => {
+                        if (!targetFrame) {
+                            console.warn(`Decode timeout for ${video.name}`);
+                            resolve(null);
+                        }
+                    }, 2000);
                 });
-
-                if (decodeError && !targetFrame) {
-                    console.warn('Decode warning:', decodeError.message);
-                }
-
-                return targetFrame;
             } catch (err) {
                 console.error('Decode error:', err);
+                if (video.decoder) {
+                    try { video.decoder.close(); } catch {}
+                    video.decoder = null;
+                    video.lastDecodedFrame = undefined;
+                }
                 return null;
             }
         }
@@ -1293,7 +1341,7 @@
                 // Detect mobile device for optimized settings
                 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
                 const captureFPS = isMobile ? 30 : 60;
-                const bitrate = isMobile ? 4000000 : 12000000;
+                const bitrate = isMobile ? 3000000 : 12000000;
                 
                 const stream = canvas.captureStream(captureFPS);
                 mediaRecorder = new MediaRecorder(stream, {
@@ -1349,7 +1397,7 @@
             const targetFPS = 30;
             const frameDelay = 1000 / targetFPS;
             let lastProgressUpdate = 0;
-            const progressUpdateInterval = isMobile ? 500 : 100; // Update less often on mobile
+            const progressUpdateInterval = isMobile ? 1000 : 100; // Update much less often on mobile
 
             for (let i = start; i <= end; i++) {
                 if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
@@ -1368,13 +1416,26 @@
 
                 // Give mobile more time to process each frame
                 if (isMobile) {
-                    await new Promise(resolve => setTimeout(resolve, frameDelay));
+                    // Mobile: Give extra time for video decoding
+                    await new Promise(resolve => setTimeout(resolve, frameDelay + 10));
                 } else {
                     await new Promise(resolve => {
                         requestAnimationFrame(() => {
                             setTimeout(resolve, Math.max(0, frameDelay - 16));
                         });
                     });
+                }
+            }
+            
+            // Clean up decoders after export
+            for (const video of videos) {
+                if (video.decoder) {
+                    try {
+                        await video.decoder.flush().catch(() => {});
+                        video.decoder.close();
+                    } catch {}
+                    video.decoder = null;
+                    video.lastDecodedFrame = undefined;
                 }
             }
         }

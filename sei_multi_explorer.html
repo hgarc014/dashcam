@@ -94,32 +94,93 @@
 
             .main {
                 flex-direction: column;
-                gap: 0.5rem;
+                gap: 0.75rem;
             }
 
-            .sidebar {
+            .control-section {
+                width: 100%;
                 order: 2;
-                max-height: 40vh;
-                overflow-y: auto;
+                max-height: none;
             }
 
             .video-section {
                 order: 1;
-                min-height: 60vh;
+                min-height: 50vh;
             }
 
             .header h1 {
-                font-size: 1.2rem;
+                font-size: 1.1rem;
+            }
+
+            .header .subtitle {
+                font-size: 0.75rem;
             }
 
             .scrubber {
-                height: 50px;
+                height: 56px;
+                padding: 0.75rem;
             }
 
             .scrubber button {
-                width: 44px;
-                height: 44px;
-                min-width: 44px;
+                width: 48px;
+                height: 48px;
+                min-width: 48px;
+            }
+
+            .scrubber button svg {
+                width: 18px;
+                height: 18px;
+            }
+
+            .panel {
+                padding: 1rem;
+            }
+
+            .panel h3 {
+                font-size: 0.9rem;
+                margin-bottom: 0.75rem;
+            }
+
+            .layout-controls label {
+                font-size: 0.9rem;
+            }
+
+            .layout-controls input,
+            .layout-controls select {
+                padding: 0.75rem;
+                font-size: 0.9rem;
+                min-height: 48px;
+            }
+
+            .btn {
+                height: 52px;
+                font-size: 0.9rem;
+            }
+
+            .video-list {
+                max-height: none;
+            }
+
+            .video-item {
+                padding: 0.75rem;
+                font-size: 0.9rem;
+            }
+
+            .video-item button {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.8rem;
+                min-height: 40px;
+            }
+
+            .crop-controls input {
+                padding: 0.75rem;
+                font-size: 0.85rem;
+                min-height: 48px;
+            }
+
+            .export-status {
+                font-size: 0.85rem;
+                margin-top: 0.5rem;
             }
         }
 
@@ -1229,10 +1290,15 @@
                     fileExt = 'webm';
                 }
 
-                const stream = canvas.captureStream(60);
+                // Detect mobile device for optimized settings
+                const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
+                const captureFPS = isMobile ? 30 : 60;
+                const bitrate = isMobile ? 4000000 : 12000000;
+                
+                const stream = canvas.captureStream(captureFPS);
                 mediaRecorder = new MediaRecorder(stream, {
                     mimeType: mimeType,
-                    videoBitsPerSecond: 12000000
+                    videoBitsPerSecond: bitrate
                 });
 
                 recordedChunks = [];
@@ -1279,10 +1345,11 @@
         }
 
         async function recordFrames(start, end, totalFrames) {
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
             const targetFPS = 30;
             const frameDelay = 1000 / targetFPS;
             let lastProgressUpdate = 0;
-            const progressUpdateInterval = 100; // Update progress every 100ms
+            const progressUpdateInterval = isMobile ? 500 : 100; // Update less often on mobile
 
             for (let i = start; i <= end; i++) {
                 if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
@@ -1299,12 +1366,16 @@
                     lastProgressUpdate = now;
                 }
 
-                // Use requestAnimationFrame for smoother frame timing
-                await new Promise(resolve => {
-                    requestAnimationFrame(() => {
-                        setTimeout(resolve, Math.max(0, frameDelay - 16));
+                // Give mobile more time to process each frame
+                if (isMobile) {
+                    await new Promise(resolve => setTimeout(resolve, frameDelay));
+                } else {
+                    await new Promise(resolve => {
+                        requestAnimationFrame(() => {
+                            setTimeout(resolve, Math.max(0, frameDelay - 16));
+                        });
                     });
-                });
+                }
             }
         }
 

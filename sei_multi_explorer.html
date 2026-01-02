@@ -933,7 +933,21 @@
                 
                 ctx.drawImage(frame, video.x, video.y, video.width, video.height);
                 
+                ctx.restore();
+                
+                // Draw selection handles AFTER restoring (outside rotation transform)
                 if (selectedVideo === video) {
+                    ctx.save();
+                    
+                    // Apply same rotation for the selection box and handles
+                    if (video.rotation !== 0) {
+                        const centerX = video.x + video.width / 2;
+                        const centerY = video.y + video.height / 2;
+                        ctx.translate(centerX, centerY);
+                        ctx.rotate((video.rotation * Math.PI) / 180);
+                        ctx.translate(-centerX, -centerY);
+                    }
+                    
                     ctx.strokeStyle = 'rgba(90, 160, 255, 0.8)';
                     ctx.lineWidth = 2;
                     ctx.strokeRect(video.x - 5, video.y - 5, video.width + 10, video.height + 10);
@@ -945,19 +959,37 @@
                     ctx.fillRect(video.x - 5, video.y + video.height + 5 - handleSize, handleSize, handleSize);
                     ctx.fillRect(video.x + video.width + 5 - handleSize, video.y + video.height + 5 - handleSize, handleSize, handleSize);
                     
+                    ctx.restore();
+                    
+                    // Draw rotation handle in screen space (not rotated)
+                    const centerX = video.x + video.width / 2;
+                    const centerY = video.y + video.height / 2;
+                    
+                    // Calculate rotated top-center point
+                    const topCenterX = video.x + video.width / 2;
+                    const topCenterY = video.y - 5;
+                    const radians = (video.rotation * Math.PI) / 180;
+                    const cosA = Math.cos(radians);
+                    const sinA = Math.sin(radians);
+                    
+                    const rotTopX = centerX + (topCenterX - centerX) * cosA - (topCenterY - centerY) * sinA;
+                    const rotTopY = centerY + (topCenterX - centerX) * sinA + (topCenterY - centerY) * cosA;
+                    
+                    // Rotation handle extends 30px from top in rotated direction
+                    const rotHandleX = rotTopX + (-25 * sinA);
+                    const rotHandleY = rotTopY + (25 * cosA);
+                    
                     ctx.beginPath();
-                    const rotHandleX = video.x + video.width / 2;
-                    const rotHandleY = video.y - 30;
+                    ctx.fillStyle = 'rgba(90, 160, 255, 0.8)';
                     ctx.arc(rotHandleX, rotHandleY, 8, 0, Math.PI * 2);
                     ctx.fill();
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
                     ctx.lineWidth = 2;
-                    ctx.moveTo(video.x + video.width / 2, video.y - 5);
+                    ctx.moveTo(rotTopX, rotTopY);
                     ctx.lineTo(rotHandleX, rotHandleY);
                     ctx.stroke();
                 }
                 
-                ctx.restore();
                 frame.close();
             }
 
@@ -1278,15 +1310,35 @@
                 
                 if (selectedVideo === v) {
                     const handleSize = 12;
-                    const corners = {
+                    const centerX = v.x + v.width / 2;
+                    const centerY = v.y + v.height / 2;
+                    const radians = (v.rotation * Math.PI) / 180;
+                    const cosA = Math.cos(radians);
+                    const sinA = Math.sin(radians);
+                    
+                    // Calculate rotated corner positions
+                    const cornersLocal = {
                         'tl': { x: v.x - 5, y: v.y - 5 },
                         'tr': { x: v.x + v.width + 5 - handleSize, y: v.y - 5 },
                         'bl': { x: v.x - 5, y: v.y + v.height + 5 - handleSize },
                         'br': { x: v.x + v.width + 5 - handleSize, y: v.y + v.height + 5 - handleSize }
                     };
                     
+                    const corners = {};
+                    for (const [corner, pos] of Object.entries(cornersLocal)) {
+                        const localX = pos.x - centerX;
+                        const localY = pos.y - centerY;
+                        corners[corner] = {
+                            x: centerX + localX * cosA - localY * sinA,
+                            y: centerY + localX * sinA + localY * cosA
+                        };
+                    }
+                    
                     for (const [corner, pos] of Object.entries(corners)) {
-                        if (x >= pos.x && x <= pos.x + handleSize && y >= pos.y && y <= pos.y + handleSize) {
+                        const dx = x - pos.x;
+                        const dy = y - pos.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist <= handleSize / Math.sqrt(2)) {
                             resizingVideoCorner = corner;
                             initialVideoScale = v.scale;
                             initialMouseX = x;
@@ -1295,8 +1347,15 @@
                         }
                     }
                     
-                    const rotHandleX = v.x + v.width / 2;
-                    const rotHandleY = v.y - 30;
+                    // Calculate rotation handle position accounting for video rotation
+                    const topCenterX = v.x + v.width / 2;
+                    const topCenterY = v.y - 5;
+                    
+                    const rotTopX = centerX + (topCenterX - centerX) * cosA - (topCenterY - centerY) * sinA;
+                    const rotTopY = centerY + (topCenterX - centerX) * sinA + (topCenterY - centerY) * cosA;
+                    const rotHandleX = rotTopX + (-25 * sinA);
+                    const rotHandleY = rotTopY + (25 * cosA);
+                    
                     const dist = Math.sqrt((x - rotHandleX) ** 2 + (y - rotHandleY) ** 2);
                     if (dist <= 8) {
                         rotatingVideo = v;
@@ -1434,15 +1493,36 @@
             // Check video resize handles first
             if (selectedVideo) {
                 const handleSize = 12;
-                const videoCorners = {
+                const centerX = selectedVideo.x + selectedVideo.width / 2;
+                const centerY = selectedVideo.y + selectedVideo.height / 2;
+                const radians = (selectedVideo.rotation * Math.PI) / 180;
+                const cosA = Math.cos(radians);
+                const sinA = Math.sin(radians);
+                
+                // Calculate rotated corner positions
+                const cornersLocal = {
                     'tl': { x: selectedVideo.x - 5, y: selectedVideo.y - 5, cursor: 'nwse-resize' },
                     'tr': { x: selectedVideo.x + selectedVideo.width + 5 - handleSize, y: selectedVideo.y - 5, cursor: 'nesw-resize' },
                     'bl': { x: selectedVideo.x - 5, y: selectedVideo.y + selectedVideo.height + 5 - handleSize, cursor: 'nesw-resize' },
                     'br': { x: selectedVideo.x + selectedVideo.width + 5 - handleSize, y: selectedVideo.y + selectedVideo.height + 5 - handleSize, cursor: 'nwse-resize' }
                 };
                 
+                const videoCorners = {};
+                for (const [corner, data] of Object.entries(cornersLocal)) {
+                    const localX = data.x - centerX;
+                    const localY = data.y - centerY;
+                    videoCorners[corner] = {
+                        x: centerX + localX * cosA - localY * sinA,
+                        y: centerY + localX * sinA + localY * cosA,
+                        cursor: data.cursor
+                    };
+                }
+                
                 for (const [corner, pos] of Object.entries(videoCorners)) {
-                    if (x >= pos.x && x <= pos.x + handleSize && y >= pos.y && y <= pos.y + handleSize) {
+                    const dx = x - pos.x;
+                    const dy = y - pos.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist <= handleSize / Math.sqrt(2)) {
                         canvas.style.cursor = pos.cursor;
                         cursorSet = true;
                         break;
@@ -1451,8 +1531,19 @@
                 
                 // Check rotation handle
                 if (!cursorSet) {
-                    const rotHandleX = selectedVideo.x + selectedVideo.width / 2;
-                    const rotHandleY = selectedVideo.y - 30;
+                    const centerX = selectedVideo.x + selectedVideo.width / 2;
+                    const centerY = selectedVideo.y + selectedVideo.height / 2;
+                    const topCenterX = selectedVideo.x + selectedVideo.width / 2;
+                    const topCenterY = selectedVideo.y - 5;
+                    const radians = (selectedVideo.rotation * Math.PI) / 180;
+                    const cosA = Math.cos(radians);
+                    const sinA = Math.sin(radians);
+                    
+                    const rotTopX = centerX + (topCenterX - centerX) * cosA - (topCenterY - centerY) * sinA;
+                    const rotTopY = centerY + (topCenterX - centerX) * sinA + (topCenterY - centerY) * cosA;
+                    const rotHandleX = rotTopX + (-25 * sinA);
+                    const rotHandleY = rotTopY + (25 * cosA);
+                    
                     const dist = Math.sqrt((x - rotHandleX) ** 2 + (y - rotHandleY) ** 2);
                     if (dist <= 8) {
                         canvas.style.cursor = 'grab';

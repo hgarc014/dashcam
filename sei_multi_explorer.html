@@ -1340,14 +1340,17 @@
 
                 // Detect mobile device for optimized settings
                 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
-                const captureFPS = isMobile ? 30 : 60;
                 const bitrate = isMobile ? 3000000 : 12000000;
                 
-                const stream = canvas.captureStream(captureFPS);
+                // Use manual frame capture (0 FPS) for precise timing control
+                const stream = canvas.captureStream(0);
                 mediaRecorder = new MediaRecorder(stream, {
                     mimeType: mimeType,
                     videoBitsPerSecond: bitrate
                 });
+                
+                // Store stream reference for manual frame requests
+                window.exportStream = stream;
 
                 recordedChunks = [];
                 mediaRecorder.ondataavailable = e => {
@@ -1397,33 +1400,42 @@
             const targetFPS = 30;
             const frameDelay = 1000 / targetFPS;
             let lastProgressUpdate = 0;
-            const progressUpdateInterval = isMobile ? 1000 : 100; // Update much less often on mobile
+            const progressUpdateInterval = isMobile ? 1000 : 100;
+            let startTime = performance.now();
 
             for (let i = start; i <= end; i++) {
                 if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
 
                 currentFrameIndex = i;
                 slider.value = i;
+                
+                // Render the frame to canvas
                 await showFrame(i);
+                
+                // Manually request frame capture from stream
+                if (window.exportStream && window.exportStream.requestFrame) {
+                    window.exportStream.requestFrame();
+                }
 
                 // Update progress display less frequently to reduce overhead
                 const now = performance.now();
                 if (now - lastProgressUpdate > progressUpdateInterval) {
                     const progress = Math.round(((i - start + 1) / totalFrames) * 100);
-                    exportStatus.textContent = `Exporting: ${progress}% (${i - start + 1}/${totalFrames})`;
+                    const elapsed = (now - startTime) / 1000;
+                    const framesProcessed = i - start + 1;
+                    const fps = framesProcessed / elapsed;
+                    exportStatus.textContent = `Exporting: ${progress}% (${framesProcessed}/${totalFrames}) ${fps.toFixed(1)} fps`;
                     lastProgressUpdate = now;
                 }
 
-                // Give mobile more time to process each frame
-                if (isMobile) {
-                    // Mobile: Give extra time for video decoding
-                    await new Promise(resolve => setTimeout(resolve, frameDelay + 10));
-                } else {
-                    await new Promise(resolve => {
-                        requestAnimationFrame(() => {
-                            setTimeout(resolve, Math.max(0, frameDelay - 16));
-                        });
-                    });
+                // Pace frame delivery to match target FPS (30 FPS = ~33ms per frame)
+                // This ensures smooth playback without rushing or lagging
+                const expectedTime = ((i - start + 1) * frameDelay);
+                const actualTime = performance.now() - startTime;
+                const timeToWait = Math.max(0, expectedTime - actualTime);
+                
+                if (timeToWait > 0) {
+                    await new Promise(resolve => setTimeout(resolve, timeToWait));
                 }
             }
             
@@ -1438,6 +1450,9 @@
                     video.lastDecodedFrame = undefined;
                 }
             }
+            
+            // Clean up stream reference
+            window.exportStream = null;
         }
 
         canvas.addEventListener('mousedown', handleCanvasMouseDown);

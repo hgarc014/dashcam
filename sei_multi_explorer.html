@@ -358,6 +358,59 @@
             text-align: center;
             margin-top: 0.25rem;
         }
+
+        .crop-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .crop-controls input {
+            padding: 0.4rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.75rem;
+        }
+
+        .crop-marker {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 20px;
+            background: var(--accent);
+            pointer-events: none;
+            z-index: 20;
+            border-radius: 2px;
+        }
+
+        .crop-marker::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 2px solid var(--bg);
+        }
+
+        .crop-range {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 4px;
+            background: var(--accent);
+            opacity: 0.3;
+            pointer-events: none;
+            z-index: 8;
+            border-radius: 2px;
+        }
     </style>
 </head>
 
@@ -379,13 +432,18 @@
                     </div>
                     <canvas id="canvas"></canvas>
                 </div>
-                <div class="scrubber">
+                <div class="scrubber" style="position: relative;">
                     <button id="playBtn" title="Play/Pause" disabled>
                         <svg viewBox="0 0 24 24">
                             <polygon points="6,4 20,12 6,20" />
                         </svg>
                     </button>
-                    <input type="range" id="slider" min="0" max="0" value="0" disabled>
+                    <div style="flex: 1; position: relative; display: flex; align-items: center;">
+                        <input type="range" id="slider" min="0" max="0" value="0" disabled style="position: relative; z-index: 15; flex: 1;">
+                        <div id="cropRange" class="crop-range" style="display: none;"></div>
+                        <div id="cropStartMarker" class="crop-marker" style="display: none;"></div>
+                        <div id="cropEndMarker" class="crop-marker" style="display: none;"></div>
+                    </div>
                     <span id="timeDisplay" style="font-size: 0.75rem; color: var(--text-muted); min-width: 60px; text-align: right;">0:00 / 0:00</span>
                 </div>
             </section>
@@ -414,6 +472,26 @@
                     </div>
                 </div>
 
+                <div class="panel">
+                    <h3>CROP TIMELINE</h3>
+                    <div class="crop-controls">
+                        <label style="grid-column: 1 / -1;">
+                            <input type="checkbox" id="cropEnabled" style="width: auto; margin-right: 0.25rem;">
+                            <span style="font-size: 0.8rem;">Enable crop</span>
+                        </label>
+                        <label>
+                            Start Frame
+                            <input type="number" id="cropStart" min="0" value="0" disabled>
+                        </label>
+                        <label>
+                            End Frame
+                            <input type="number" id="cropEnd" min="0" value="0" disabled>
+                        </label>
+                        <button class="btn btn-secondary" id="setCropStartBtn" disabled style="grid-column: 1;">Set Start</button>
+                        <button class="btn btn-secondary" id="setCropEndBtn" disabled style="grid-column: 2;">Set End</button>
+                    </div>
+                </div>
+
                 <div class="button-group">
                     <button class="btn btn-secondary" id="resetLayoutBtn" disabled>Reset Layout</button>
                     <button class="btn" id="exportBtn" disabled>Export Video</button>
@@ -435,6 +513,7 @@
         let hudRenderer = new SeiCanvasHud();
         let mediaRecorder = null;
         let recordedChunks = [];
+        let cropStart = 0, cropEnd = 0, cropEnabled = false;
 
         const $ = id => document.getElementById(id);
         const dropOverlay = $('dropOverlay'), fileInput = $('fileInput');
@@ -443,6 +522,9 @@
         const videoList = $('videoList'), canvasSizeSelect = $('canvasSizeSelect');
         const applyLayoutBtn = $('applyLayoutBtn'), resetLayoutBtn = $('resetLayoutBtn');
         const timeDisplay = $('timeDisplay'), exportStatus = $('exportStatus');
+        const cropEnabledCheckbox = $('cropEnabled'), cropStartInput = $('cropStart');
+        const cropEndInput = $('cropEnd'), setCropStartBtn = $('setCropStartBtn'), setCropEndBtn = $('setCropEndBtn');
+        const cropStartMarker = $('cropStartMarker'), cropEndMarker = $('cropEndMarker'), cropRange = $('cropRange');
 
         dropOverlay.onclick = () => fileInput.click();
         fileInput.onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
@@ -459,7 +541,7 @@
                 handleFiles(e.dataTransfer?.files ?? []);
             }
         };
-        slider.oninput = () => { pause(); showFrame(+slider.value); };
+        slider.oninput = () => { pause(); showFrame(+slider.value); updateCropVisuals(); };
         playBtn.onclick = () => playing ? pause() : play();
         document.onkeydown = e => {
             if (!videos.length) return;
@@ -477,10 +559,65 @@
         resetLayoutBtn.onclick = () => resetLayout();
         exportBtn.onclick = () => startExport();
 
+        cropEnabledCheckbox.onchange = () => {
+            cropEnabled = cropEnabledCheckbox.checked;
+            cropStartInput.disabled = !cropEnabled;
+            cropEndInput.disabled = !cropEnabled;
+            setCropStartBtn.disabled = !cropEnabled || !videos.length;
+            setCropEndBtn.disabled = !cropEnabled || !videos.length;
+            updateCropVisuals();
+        };
+
+        setCropStartBtn.onclick = () => {
+            cropStart = currentFrameIndex;
+            cropStartInput.value = cropStart;
+            if (cropEnd < cropStart) {
+                cropEnd = Math.min(cropStart + 30, slider.max);
+                cropEndInput.value = cropEnd;
+            }
+            updateCropVisuals();
+        };
+
+        setCropEndBtn.onclick = () => {
+            cropEnd = currentFrameIndex;
+            cropEndInput.value = cropEnd;
+            if (cropStart > cropEnd) {
+                cropStart = Math.max(cropEnd - 30, 0);
+                cropStartInput.value = cropStart;
+            }
+            updateCropVisuals();
+        };
+
+        cropStartInput.oninput = () => {
+            cropStart = Math.max(0, Math.min(parseInt(cropStartInput.value) || 0, slider.max));
+            cropStartInput.value = cropStart;
+            if (cropEnd < cropStart) {
+                cropEnd = cropStart;
+                cropEndInput.value = cropEnd;
+            }
+            updateCropVisuals();
+        };
+
+        cropEndInput.oninput = () => {
+            cropEnd = Math.max(0, Math.min(parseInt(cropEndInput.value) || 0, slider.max));
+            cropEndInput.value = cropEnd;
+            if (cropStart > cropEnd) {
+                cropStart = cropEnd;
+                cropStartInput.value = cropStart;
+            }
+            updateCropVisuals();
+        };
+
         DashcamHelpers.initProtobuf().then(({ SeiMetadata, enumFields }) => {
             seiType = SeiMetadata;
             seiFields = DashcamHelpers.deriveFieldInfo(SeiMetadata, enumFields, { useLabels: true });
         }).catch(err => console.error('Protobuf init failed:', err));
+
+        window.addEventListener('resize', () => {
+            if (cropEnabled && videos.length) {
+                updateCropVisuals();
+            }
+        });
 
         function applyCanvasSize() {
             const [w, h] = canvasSizeSelect.value.split('x').map(Number);
@@ -581,12 +718,45 @@
             slider.max = maxFrames - 1;
             slider.value = 0;
             currentFrameIndex = 0;
+            cropStart = 0;
+            cropEnd = maxFrames - 1;
+            cropStartInput.max = maxFrames - 1;
+            cropEndInput.max = maxFrames - 1;
+            cropStartInput.value = cropStart;
+            cropEndInput.value = cropEnd;
             slider.disabled = false;
             playBtn.disabled = false;
             exportBtn.disabled = false;
             applyLayoutBtn.disabled = false;
             resetLayoutBtn.disabled = false;
+            setCropStartBtn.disabled = !cropEnabled;
+            setCropEndBtn.disabled = !cropEnabled;
+            updateCropVisuals();
             showFrame(0);
+        }
+
+        function updateCropVisuals() {
+            if (cropEnabled && videos.length && slider.max > 0) {
+                const sliderRect = slider.getBoundingClientRect();
+                const startRatio = cropStart / slider.max;
+                const endRatio = cropEnd / slider.max;
+                
+                const startPos = startRatio * 100;
+                const endPos = endRatio * 100;
+                
+                cropStartMarker.style.left = startPos + '%';
+                cropEndMarker.style.left = endPos + '%';
+                cropRange.style.left = startPos + '%';
+                cropRange.style.width = (endPos - startPos) + '%';
+                
+                cropStartMarker.style.display = 'block';
+                cropEndMarker.style.display = 'block';
+                cropRange.style.display = 'block';
+            } else {
+                cropStartMarker.style.display = 'none';
+                cropEndMarker.style.display = 'none';
+                cropRange.style.display = 'none';
+            }
         }
 
         function resetApp() {
@@ -620,8 +790,16 @@
         function playNext() {
             if (!playing) return;
             currentFrameIndex++;
-            if (currentFrameIndex >= slider.max) {
-                pause();
+            const maxFrame = cropEnabled ? cropEnd : slider.max;
+            if (currentFrameIndex >= maxFrame) {
+                if (cropEnabled) {
+                    currentFrameIndex = cropStart;
+                    slider.value = currentFrameIndex;
+                    showFrame(currentFrameIndex);
+                    playTimer = setTimeout(playNext, 33);
+                } else {
+                    pause();
+                }
                 return;
             }
             slider.value = currentFrameIndex;
@@ -801,7 +979,8 @@
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `dashcam_export_${Date.now()}.webm`;
+                    const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
+                    a.download = `dashcam_export${cropSuffix}_${Date.now()}.webm`;
                     a.click();
                     URL.revokeObjectURL(url);
                     
@@ -812,13 +991,15 @@
                 };
 
                 mediaRecorder.start();
-                exportStatus.textContent = 'Recording... (playing through timeline)';
+                const startFrame = cropEnabled ? cropStart : 0;
+                const endFrame = cropEnabled ? cropEnd : slider.max;
+                exportStatus.textContent = `Recording frames ${startFrame} to ${endFrame}...`;
 
                 pause();
-                currentFrameIndex = 0;
-                slider.value = 0;
+                currentFrameIndex = startFrame;
+                slider.value = startFrame;
                 
-                await recordFrames();
+                await recordFrames(startFrame, endFrame);
                 
                 mediaRecorder.stop();
                 
@@ -830,14 +1011,14 @@
             }
         }
 
-        async function recordFrames() {
-            for (let i = 0; i <= slider.max; i++) {
+        async function recordFrames(start, end) {
+            for (let i = start; i <= end; i++) {
                 if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
                 
                 currentFrameIndex = i;
                 slider.value = i;
                 await showFrame(i);
-                exportStatus.textContent = `Recording frame ${i + 1} / ${slider.max + 1}`;
+                exportStatus.textContent = `Recording frame ${i - start + 1} / ${end - start + 1}`;
                 
                 await new Promise(resolve => setTimeout(resolve, 33));
             }

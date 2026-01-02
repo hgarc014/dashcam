@@ -978,12 +978,17 @@
                 if (keyIdx < 0) return null;
 
                 if (video.decoder) {
-                    try { video.decoder.close(); } catch {}
+                    try { 
+                        await video.decoder.flush().catch(() => {});
+                        video.decoder.close(); 
+                    } catch {}
+                    video.decoder = null;
                 }
 
                 let count = 0;
                 const target = frameIdx - keyIdx + 1;
                 let targetFrame = null;
+                let decodeError = null;
 
                 await new Promise((resolve, reject) => {
                     video.decoder = new VideoDecoder({
@@ -995,7 +1000,10 @@
                             }
                             if (count >= target) resolve();
                         },
-                        error: reject
+                        error: (err) => {
+                            decodeError = err;
+                            resolve();
+                        }
                     });
 
                     video.decoder.configure({
@@ -1007,8 +1015,12 @@
                     for (let i = keyIdx; i <= frameIdx; i++) {
                         video.decoder.decode(createChunk(video.frames[i], video.config));
                     }
-                    video.decoder.flush().catch(reject);
+                    video.decoder.flush().catch(() => resolve());
                 });
+
+                if (decodeError && !targetFrame) {
+                    console.warn('Decode warning:', decodeError.message);
+                }
 
                 return targetFrame;
             } catch (err) {

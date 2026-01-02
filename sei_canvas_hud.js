@@ -454,42 +454,6 @@
         ctx.restore();
       }
     }
-
-    // drawThrottle(ctx, x, y, pct) {
-    //   this.drawPedal(ctx, x, y, pct, "rgba(120, 255, 120, 0.7)");
-    // }
-    //
-    // drawBrake(ctx, x, y, active) {
-    //   this.drawPedal(ctx, x, y, active ? 100 : 0, "rgba(255, 90, 90, 0.75)");
-    // }
-    //
-    // drawGear(ctx, x, y, gear) {
-    //   const width = 40;
-    //   const height = 24;
-    //   const r = 12;
-    //
-    //   ctx.fillStyle = "rgba(10, 10, 12, 0.5)";
-    //   ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
-    //   ctx.lineWidth = 1;
-    //
-    //   this.roundRect(ctx, x - width/2, y - height/2, width, height, r);
-    //   ctx.fill();
-    //   ctx.stroke();
-    //
-    //   ctx.font = "bold 12px system-ui";
-    //   ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
-    //   ctx.textAlign = "center";
-    //   ctx.textBaseline = "middle";
-    //   ctx.fillText(gear, x, y);
-    // }
-    //
-    // drawAutopilotLabel(ctx, x, y, state) {
-    //   ctx.font = "600 13px system-ui";
-    //   ctx.fillStyle = "rgb(90, 160, 255)";
-    //   ctx.textAlign = "center";
-    //   ctx.textBaseline = "middle";
-    //   ctx.fillText(state, x, y);
-    // }
   }
 
   window.SeiCanvasHud = CanvasHud;

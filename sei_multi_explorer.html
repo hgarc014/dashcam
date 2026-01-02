@@ -379,37 +379,50 @@
             position: absolute;
             top: 50%;
             transform: translateY(-50%);
-            width: 3px;
-            height: 20px;
+            width: 12px;
+            height: 24px;
             background: var(--accent);
-            pointer-events: none;
+            cursor: ew-resize;
             z-index: 20;
-            border-radius: 2px;
+            border-radius: 3px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            border: 2px solid var(--bg);
         }
 
-        .crop-marker::after {
+        .crop-marker:hover {
+            background: #6aa0ff;
+        }
+
+        .crop-marker::before {
             content: '';
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: var(--accent);
-            border: 2px solid var(--bg);
+            width: 2px;
+            height: 12px;
+            background: var(--bg);
         }
 
         .crop-range {
             position: absolute;
             top: 50%;
             transform: translateY(-50%);
-            height: 4px;
-            background: var(--accent);
-            opacity: 0.3;
+            height: 6px;
+            background: rgba(90, 160, 255, 0.4);
             pointer-events: none;
             z-index: 8;
-            border-radius: 2px;
+            border-radius: 3px;
+            border: 1px solid rgba(90, 160, 255, 0.6);
+        }
+        
+        .crop-excluded {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            z-index: 9;
         }
     </style>
 </head>
@@ -440,6 +453,8 @@
                     </button>
                     <div style="flex: 1; position: relative; display: flex; align-items: center;">
                         <input type="range" id="slider" min="0" max="0" value="0" disabled style="position: relative; z-index: 15; flex: 1;">
+                        <div id="cropExcludedLeft" class="crop-excluded" style="display: none; left: 0;"></div>
+                        <div id="cropExcludedRight" class="crop-excluded" style="display: none; right: 0;"></div>
                         <div id="cropRange" class="crop-range" style="display: none;"></div>
                         <div id="cropStartMarker" class="crop-marker" style="display: none;"></div>
                         <div id="cropEndMarker" class="crop-marker" style="display: none;"></div>
@@ -489,10 +504,6 @@
                 <div class="panel">
                     <h3>CROP TIMELINE</h3>
                     <div class="crop-controls">
-                        <label style="grid-column: 1 / -1;">
-                            <input type="checkbox" id="cropEnabled" style="width: auto; margin-right: 0.25rem;">
-                            <span style="font-size: 0.8rem;">Enable crop</span>
-                        </label>
                         <label>
                             Start Frame
                             <input type="number" id="cropStart" min="0" value="0" disabled>
@@ -501,8 +512,6 @@
                             End Frame
                             <input type="number" id="cropEnd" min="0" value="0" disabled>
                         </label>
-                        <button class="btn btn-secondary" id="setCropStartBtn" disabled style="grid-column: 1;">Set Start</button>
-                        <button class="btn btn-secondary" id="setCropEndBtn" disabled style="grid-column: 2;">Set End</button>
                     </div>
                 </div>
 
@@ -527,7 +536,8 @@
         let hudRenderer = new SeiCanvasHud();
         let mediaRecorder = null;
         let recordedChunks = [];
-        let cropStart = 0, cropEnd = 0, cropEnabled = false;
+        let cropStart = 0, cropEnd = 0;
+        const cropEnabled = true;
         let hudX = null, hudY = null;
         let hudScale = 1.0;
         let hudWidth = 420, hudHeight = 210;
@@ -541,10 +551,12 @@
         const videoList = $('videoList'), canvasSizeSelect = $('canvasSizeSelect');
         const applyLayoutBtn = $('applyLayoutBtn'), resetLayoutBtn = $('resetLayoutBtn');
         const timeDisplay = $('timeDisplay'), exportStatus = $('exportStatus');
-        const cropEnabledCheckbox = $('cropEnabled'), cropStartInput = $('cropStart');
-        const cropEndInput = $('cropEnd'), setCropStartBtn = $('setCropStartBtn'), setCropEndBtn = $('setCropEndBtn');
+        const cropStartInput = $('cropStart');
+        const cropEndInput = $('cropEnd');
         const cropStartMarker = $('cropStartMarker'), cropEndMarker = $('cropEndMarker'), cropRange = $('cropRange');
+        const cropExcludedLeft = $('cropExcludedLeft'), cropExcludedRight = $('cropExcludedRight');
         const exportFormat = $('exportFormat');
+        let draggingCropMarker = null;
 
         dropOverlay.onclick = () => fileInput.click();
         fileInput.onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
@@ -579,34 +591,6 @@
         resetLayoutBtn.onclick = () => resetLayout();
         exportBtn.onclick = () => startExport();
 
-        cropEnabledCheckbox.onchange = () => {
-            cropEnabled = cropEnabledCheckbox.checked;
-            cropStartInput.disabled = !cropEnabled;
-            cropEndInput.disabled = !cropEnabled;
-            setCropStartBtn.disabled = !cropEnabled || !videos.length;
-            setCropEndBtn.disabled = !cropEnabled || !videos.length;
-            updateCropVisuals();
-        };
-
-        setCropStartBtn.onclick = () => {
-            cropStart = currentFrameIndex;
-            cropStartInput.value = cropStart;
-            if (cropEnd < cropStart) {
-                cropEnd = Math.min(cropStart + 30, slider.max);
-                cropEndInput.value = cropEnd;
-            }
-            updateCropVisuals();
-        };
-
-        setCropEndBtn.onclick = () => {
-            cropEnd = currentFrameIndex;
-            cropEndInput.value = cropEnd;
-            if (cropStart > cropEnd) {
-                cropStart = Math.max(cropEnd - 30, 0);
-                cropStartInput.value = cropStart;
-            }
-            updateCropVisuals();
-        };
 
         cropStartInput.oninput = () => {
             cropStart = Math.max(0, Math.min(parseInt(cropStartInput.value) || 0, slider.max));
@@ -627,6 +611,41 @@
             }
             updateCropVisuals();
         };
+        
+        cropStartMarker.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            draggingCropMarker = 'start';
+        });
+        
+        cropEndMarker.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            draggingCropMarker = 'end';
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!draggingCropMarker) return;
+            
+            const sliderRect = slider.getBoundingClientRect();
+            const x = e.clientX - sliderRect.left;
+            const ratio = Math.max(0, Math.min(1, x / sliderRect.width));
+            const frame = Math.round(ratio * slider.max);
+            
+            if (draggingCropMarker === 'start') {
+                cropStart = Math.min(frame, cropEnd - 1);
+                cropStartInput.value = cropStart;
+            } else if (draggingCropMarker === 'end') {
+                cropEnd = Math.max(frame, cropStart + 1);
+                cropEndInput.value = cropEnd;
+            }
+            
+            updateCropVisuals();
+        });
+        
+        document.addEventListener('mouseup', () => {
+            draggingCropMarker = null;
+        });
 
         DashcamHelpers.initProtobuf().then(({ SeiMetadata, enumFields }) => {
             seiType = SeiMetadata;
@@ -769,8 +788,8 @@
             exportBtn.disabled = false;
             applyLayoutBtn.disabled = false;
             resetLayoutBtn.disabled = false;
-            setCropStartBtn.disabled = !cropEnabled;
-            setCropEndBtn.disabled = !cropEnabled;
+            cropStartInput.disabled = false;
+            cropEndInput.disabled = false;
             updateCropVisuals();
             showFrame(0);
         }
@@ -788,14 +807,21 @@
                 cropEndMarker.style.left = endPos + '%';
                 cropRange.style.left = startPos + '%';
                 cropRange.style.width = (endPos - startPos) + '%';
+                
+                cropExcludedLeft.style.width = startPos + '%';
+                cropExcludedRight.style.width = (100 - endPos) + '%';
 
                 cropStartMarker.style.display = 'block';
                 cropEndMarker.style.display = 'block';
                 cropRange.style.display = 'block';
+                cropExcludedLeft.style.display = 'block';
+                cropExcludedRight.style.display = 'block';
             } else {
                 cropStartMarker.style.display = 'none';
                 cropEndMarker.style.display = 'none';
                 cropRange.style.display = 'none';
+                cropExcludedLeft.style.display = 'none';
+                cropExcludedRight.style.display = 'none';
             }
         }
 

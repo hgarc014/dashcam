@@ -109,98 +109,110 @@
         this.lastBlink = now;
       }
 
-      // Tesla-style larger card (matches your image2 proportions much better)
+      // Tesla-style larger card
       const cardWidth = 420;
       const cardHeight = 210;
 
-      ctx.fillStyle = "rgba(10, 10, 12, 0.38)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
-      ctx.lineWidth = 1;
-      this.roundRect(ctx, 0, 0, cardWidth, cardHeight, 26);
+      // Draw shadow
+      ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 4;
+      
+      ctx.fillStyle = "rgba(15, 15, 18, 0.85)";
+      this.roundRect(ctx, 0, 0, cardWidth, cardHeight, 20);
       ctx.fill();
+      
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.lineWidth = 1.5;
+      this.roundRect(ctx, 0, 0, cardWidth, cardHeight, 20);
       ctx.stroke();
 
       const cx = cardWidth / 2;
 
       // --- timestamp at top ---
       if (t.timestamp) {
-        ctx.font = "600 13px system-ui";
-        ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+        ctx.font = "500 12px -apple-system, system-ui, sans-serif";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillText(t.timestamp, cx, 12);
+        ctx.fillText(t.timestamp, cx, 16);
       }
 
       // --- top row layout ---
-      const topRowY = 80;
+      const topRowY = 75;
 
       // Gear circle (left)
-      this.drawGearCircle(ctx, 55, topRowY - 25, t.gear);
+      this.drawGearCircle(ctx, 60, topRowY - 15, t.gear);
 
       // Blinkers + speed center
-      this.drawSignalPill(ctx, cx - 75, topRowY - 25, "◀", t.left && this.blinkState);
-      this.drawSpeed(ctx, cx, topRowY - 25, t.speed, this.opts.useMph ? "mph" : "km/h");
-      this.drawSignalPill(ctx, cx + 75, topRowY - 25, "▶", t.right && this.blinkState);
+      this.drawSignalPill(ctx, cx - 80, topRowY - 15, "◀", t.left && this.blinkState);
+      this.drawSpeed(ctx, cx, topRowY - 15, t.speed, this.opts.useMph ? "mph" : "km/h");
+      this.drawSignalPill(ctx, cx + 80, topRowY - 15, "▶", t.right && this.blinkState);
 
       // Steering wheel circle (top right)
-      this.drawWheelCircle(ctx, cardWidth - 55, topRowY - 25, t.steerDeg);
+      this.drawWheelCircle(ctx, cardWidth - 60, topRowY - 15, t.steerDeg);
 
       // --- bottom row icons ---
-      this.drawBrakeCircle(ctx, 70, 160, t.brake);
-      this.drawThrottleCircle(ctx, cardWidth - 70, 160, t.throttlePct);
+      this.drawBrakeCircle(ctx, 75, 145, t.brake);
+      this.drawThrottleCircle(ctx, cardWidth - 75, 145, t.throttlePct);
 
       // --- label ---
-      // In your screenshot it always shows when AP is active; tweak rule as you want
       if (t.autopilotState && t.autopilotState !== "OFF") {
-        ctx.font = "700 28px system-ui";
-        ctx.fillStyle = "rgb(90, 160, 255)";
+        ctx.font = "600 26px -apple-system, system-ui, sans-serif";
+        ctx.fillStyle = "rgb(75, 150, 255)";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText("Self-Driving", cx, 175);
+        ctx.fillText("Self-Driving", cx, 155);
       }
     }
 
 // ---------- Tesla-ish primitives ----------
 
     drawGearCircle(ctx, x, y, gear) {
-      const r = 30;
-      ctx.fillStyle = "rgba(10, 10, 12, 0.40)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-      ctx.lineWidth = 1;
+      const r = 28;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      ctx.font = "800 20px system-ui";
-      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.font = "700 18px -apple-system, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(gear || "—", x, y);
     }
 
     drawSignalPill(ctx, x, y, arrow, active) {
-      const w = 70, h = 40, r = 18;
+      const w = 68, h = 36, r = 16;
 
-      ctx.fillStyle = "rgba(10, 10, 12, 0.35)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
-      ctx.lineWidth = 1;
+      ctx.fillStyle = active ? "rgba(255, 180, 0, 0.15)" : "rgba(255, 255, 255, 0.06)";
+      ctx.strokeStyle = active ? "rgba(255, 180, 0, 0.4)" : "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 1.5;
       this.roundRect(ctx, x - w/2, y - h/2, w, h, r);
       ctx.fill();
       ctx.stroke();
 
-      ctx.font = "18px system-ui";
-      ctx.fillStyle = active ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.35)";
+      ctx.font = "16px -apple-system, system-ui, sans-serif";
+      ctx.fillStyle = active ? "rgba(255, 200, 0, 1)" : "rgba(255, 255, 255, 0.3)";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(arrow, x, y);
     }
 
     drawWheelCircle(ctx, x, y, angleDeg) {
-      const r = 30;
-      ctx.fillStyle = "rgba(10, 10, 12, 0.40)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-      ctx.lineWidth = 1;
+      const r = 28;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
@@ -215,8 +227,8 @@
       ctx.translate(x, y);
       ctx.rotate((angleDeg * Math.PI) / 180);
 
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.90)";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.lineWidth = 2.5;
       ctx.lineCap = "round";
 
       // outer wheel
@@ -245,10 +257,13 @@
     }
 
     drawBrakeCircle(ctx, x, y, active) {
-      const r = 30;
-      ctx.fillStyle = "rgba(10, 10, 12, 0.40)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-      ctx.lineWidth = 1;
+      const r = 28;
+      const fillColor = active ? "rgba(220, 50, 50, 0.2)" : "rgba(255, 255, 255, 0.06)";
+      const strokeColor = active ? "rgba(220, 50, 50, 0.5)" : "rgba(255, 255, 255, 0.12)";
+
+      ctx.fillStyle = fillColor;
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
@@ -259,14 +274,28 @@
     }
 
     drawThrottleCircle(ctx, x, y, pct) {
-      const r = 30;
-      ctx.fillStyle = "rgba(10, 10, 12, 0.40)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-      ctx.lineWidth = 1;
+      const r = 28;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+      
+      // Draw progress arc based on throttle percentage
+      if (pct > 0) {
+        const progressR = r - 3;
+        const startAngle = -Math.PI / 2; // Start at top
+        const endAngle = startAngle + (pct / 100) * Math.PI * 2;
+        
+        ctx.strokeStyle = "rgba(100, 220, 100, 0.8)";
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(x, y, progressR, startAngle, endAngle);
+        ctx.stroke();
+      }
 
       this.drawThrottlePedalIcon(ctx, x, y, pct);
     }
@@ -326,15 +355,16 @@
     }
 
     drawSpeed(ctx, x, y, speed, unit) {
-      ctx.font = "bold 28px system-ui";
+      ctx.font = "700 46px -apple-system, system-ui, sans-serif";
       ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(Math.round(speed).toString(), x, y);
+      const rounded = Math.round(speed);
+      ctx.fillText(String(rounded), x, y - 4);
 
-      ctx.font = "12px system-ui";
-      ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-      ctx.fillText(unit, x, y + 20);
+      ctx.font = "500 13px -apple-system, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.fillText(unit, x, y + 24);
     }
 
     drawSignal(ctx, x, y, arrow, active) {

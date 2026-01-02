@@ -514,6 +514,9 @@
         let mediaRecorder = null;
         let recordedChunks = [];
         let cropStart = 0, cropEnd = 0, cropEnabled = false;
+        let hudX = null, hudY = null;
+        let hudWidth = 420, hudHeight = 210;
+        let hudVisible = true;
 
         const $ = id => document.getElementById(id);
         const dropOverlay = $('dropOverlay'), fileInput = $('fileInput');
@@ -842,7 +845,7 @@
                 frame.close();
             }
 
-            if (currentSei) {
+            if (currentSei && hudVisible) {
                 let fields = {};
                 for (const { propName, label, enumMap } of seiFields) {
                     const value = currentSei?.[propName];
@@ -850,9 +853,19 @@
                     fields[propName] = { value, displayValue };
                 }
                 const telemetry = { ...currentSei, fields };
-                const hudX = canvas.width / 2 - 160;
-                const hudY = 20;
+                
+                if (hudX === null || hudY === null) {
+                    hudX = canvas.width / 2 - hudWidth / 2;
+                    hudY = 20;
+                }
+                
                 hudRenderer.render(ctx, telemetry, hudX, hudY, 1.0);
+                
+                if (draggedHud || isHoveringHud) {
+                    ctx.strokeStyle = 'rgba(90, 160, 255, 0.6)';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(hudX - 5, hudY - 5, hudWidth + 10, hudHeight + 10);
+                }
             }
         }
 
@@ -1035,6 +1048,8 @@
 
         canvas.addEventListener('mousedown', handleCanvasMouseDown);
         let draggedVideo = null;
+        let draggedHud = false;
+        let isHoveringHud = false;
         let dragOffsetX = 0;
         let dragOffsetY = 0;
 
@@ -1044,6 +1059,15 @@
             const scaleY = canvas.height / rect.height;
             const x = (e.clientX - rect.left) * scaleX;
             const y = (e.clientY - rect.top) * scaleY;
+
+            if (hudVisible && hudX !== null && hudY !== null &&
+                x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight) {
+                draggedHud = true;
+                dragOffsetX = x - hudX;
+                dragOffsetY = y - hudY;
+                canvas.style.cursor = 'move';
+                return;
+            }
 
             const sortedVideos = [...videos].sort((a, b) => b.zIndex - a.zIndex);
             
@@ -1067,18 +1091,39 @@
 
         canvas.addEventListener('mousemove', handleCanvasMouseMove);
         function handleCanvasMouseMove(e) {
-            if (!draggedVideo) return;
-            
             const rect = canvas.getBoundingClientRect();
             const scaleX = canvas.width / rect.width;
             const scaleY = canvas.height / rect.height;
             const x = (e.clientX - rect.left) * scaleX;
             const y = (e.clientY - rect.top) * scaleY;
 
-            draggedVideo.x = Math.max(0, Math.min(canvas.width - draggedVideo.width, x - dragOffsetX));
-            draggedVideo.y = Math.max(0, Math.min(canvas.height - draggedVideo.height, y - dragOffsetY));
+            if (draggedHud) {
+                hudX = Math.max(0, Math.min(canvas.width - hudWidth, x - dragOffsetX));
+                hudY = Math.max(0, Math.min(canvas.height - hudHeight, y - dragOffsetY));
+                showFrame(currentFrameIndex);
+                return;
+            }
             
-            showFrame(currentFrameIndex);
+            if (draggedVideo) {
+                draggedVideo.x = Math.max(0, Math.min(canvas.width - draggedVideo.width, x - dragOffsetX));
+                draggedVideo.y = Math.max(0, Math.min(canvas.height - draggedVideo.height, y - dragOffsetY));
+                showFrame(currentFrameIndex);
+                return;
+            }
+
+            const wasHoveringHud = isHoveringHud;
+            isHoveringHud = hudVisible && hudX !== null && hudY !== null &&
+                           x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight;
+            
+            if (isHoveringHud) {
+                canvas.style.cursor = 'move';
+            } else {
+                canvas.style.cursor = 'default';
+            }
+
+            if (wasHoveringHud !== isHoveringHud) {
+                showFrame(currentFrameIndex);
+            }
         }
 
         canvas.addEventListener('mouseup', handleCanvasMouseUp);
@@ -1086,8 +1131,11 @@
         function handleCanvasMouseUp() {
             if (draggedVideo) {
                 draggedVideo = null;
-                canvas.style.cursor = 'default';
             }
+            if (draggedHud) {
+                draggedHud = false;
+            }
+            canvas.style.cursor = 'default';
         }
     </script>
 </body>

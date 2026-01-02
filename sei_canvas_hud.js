@@ -94,6 +94,13 @@
       ctx.restore();
     }
 
+    getSize(scale = 1) {
+      return {
+        width: 420 * scale,
+        height: 210 * scale
+      };
+    }
+
     drawCard(ctx, t) {
       const now = Date.now();
       if (now - this.lastBlink > 550) {
@@ -118,19 +125,19 @@
       const topRowY = 70;
 
       // Gear circle (left)
-      this.drawGearCircle(ctx, 60, topRowY - 25, t.gear);
+      this.drawGearCircle(ctx, 55, topRowY - 25, t.gear);
 
       // Blinkers + speed center
-      this.drawSignalPill(ctx, cx - 90, topRowY - 25, "◀", t.left && this.blinkState);
+      this.drawSignalPill(ctx, cx - 75, topRowY - 25, "◀", t.left && this.blinkState);
       this.drawSpeed(ctx, cx, topRowY - 25, t.speed, this.opts.useMph ? "mph" : "km/h");
-      this.drawSignalPill(ctx, cx + 90, topRowY - 25, "▶", t.right && this.blinkState);
+      this.drawSignalPill(ctx, cx + 75, topRowY - 25, "▶", t.right && this.blinkState);
 
       // Steering wheel circle (top right)
-      this.drawWheelCircle(ctx, cardWidth - 65, topRowY - 25, t.steerDeg);
+      this.drawWheelCircle(ctx, cardWidth - 55, topRowY - 25, t.steerDeg);
 
       // --- bottom row icons ---
-      this.drawBrakeCircle(ctx, 60, 150, t.brake);
-      this.drawThrottleCircle(ctx, cardWidth - 65, 150, t.throttlePct);
+      this.drawBrakeCircle(ctx, 70, 150, t.brake);
+      this.drawThrottleCircle(ctx, cardWidth - 70, 150, t.throttlePct);
 
       // --- label ---
       // In your screenshot it always shows when AP is active; tweak rule as you want

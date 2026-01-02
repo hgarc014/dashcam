@@ -473,6 +473,20 @@
                 </div>
 
                 <div class="panel">
+                    <h3>EXPORT</h3>
+                    <div class="layout-controls">
+                        <label>
+                            Export Format
+                            <select id="exportFormat">
+                                <option value="webm-vp9">WebM (VP9)</option>
+                                <option value="webm-vp8">WebM (VP8)</option>
+                                <option value="webm-h264" disabled>WebM (H.264) - Not supported</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="panel">
                     <h3>CROP TIMELINE</h3>
                     <div class="crop-controls">
                         <label style="grid-column: 1 / -1;">
@@ -515,8 +529,10 @@
         let recordedChunks = [];
         let cropStart = 0, cropEnd = 0, cropEnabled = false;
         let hudX = null, hudY = null;
+        let hudScale = 1.0;
         let hudWidth = 420, hudHeight = 210;
         let hudVisible = true;
+        let resizingHudCorner = null;
 
         const $ = id => document.getElementById(id);
         const dropOverlay = $('dropOverlay'), fileInput = $('fileInput');
@@ -528,6 +544,7 @@
         const cropEnabledCheckbox = $('cropEnabled'), cropStartInput = $('cropStart');
         const cropEndInput = $('cropEnd'), setCropStartBtn = $('setCropStartBtn'), setCropEndBtn = $('setCropEndBtn');
         const cropStartMarker = $('cropStartMarker'), cropEndMarker = $('cropEndMarker'), cropRange = $('cropRange');
+        const exportFormat = $('exportFormat');
 
         dropOverlay.onclick = () => fileInput.click();
         fileInput.onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
@@ -622,10 +639,21 @@
             }
         });
 
+        function clampHudToCanvas() {
+            if (hudX == null || hudY == null) return;
+            const size = hudRenderer.getSize(hudScale);
+            hudWidth = size.width;
+            hudHeight = size.height;
+
+            hudX = Math.max(0, Math.min(canvas.width - hudWidth, hudX));
+            hudY = Math.max(0, Math.min(canvas.height - hudHeight, hudY));
+        }
+
         function applyCanvasSize() {
             const [w, h] = canvasSizeSelect.value.split('x').map(Number);
             canvas.width = w;
             canvas.height = h;
+            clampHudToCanvas();
             if (videos.length) showFrame(currentFrameIndex);
         }
 
@@ -672,6 +700,7 @@
                     width: config.width / 2,
                     height: config.height / 2,
                     scale: 0.5,
+                    rotation: 0,
                     visible: true,
                     zIndex: videos.length
                 };
@@ -743,15 +772,15 @@
                 const sliderRect = slider.getBoundingClientRect();
                 const startRatio = cropStart / slider.max;
                 const endRatio = cropEnd / slider.max;
-                
+
                 const startPos = startRatio * 100;
                 const endPos = endRatio * 100;
-                
+
                 cropStartMarker.style.left = startPos + '%';
                 cropEndMarker.style.left = endPos + '%';
                 cropRange.style.left = startPos + '%';
                 cropRange.style.width = (endPos - startPos) + '%';
-                
+
                 cropStartMarker.style.display = 'block';
                 cropEndMarker.style.display = 'block';
                 cropRange.style.display = 'block';
@@ -812,7 +841,7 @@
 
         async function showFrame(index) {
             currentFrameIndex = index;
-            
+
             const totalSeconds = Math.floor(index / 30);
             const currentMin = Math.floor(totalSeconds / 60);
             const currentSec = totalSeconds % 60;
@@ -831,7 +860,7 @@
                 if (frame) {
                     decodedFrames.push({ video, frame });
                 }
-                
+
                 if (!currentSei && video.frames[frameIdx].sei) {
                     currentSei = video.frames[frameIdx].sei;
                 }
@@ -841,7 +870,43 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             for (const { video, frame } of decodedFrames) {
+                ctx.save();
+                
+                if (video.rotation !== 0) {
+                    const centerX = video.x + video.width / 2;
+                    const centerY = video.y + video.height / 2;
+                    ctx.translate(centerX, centerY);
+                    ctx.rotate((video.rotation * Math.PI) / 180);
+                    ctx.translate(-centerX, -centerY);
+                }
+                
                 ctx.drawImage(frame, video.x, video.y, video.width, video.height);
+                
+                if (selectedVideo === video) {
+                    ctx.strokeStyle = 'rgba(90, 160, 255, 0.8)';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(video.x - 5, video.y - 5, video.width + 10, video.height + 10);
+                    
+                    const handleSize = 12;
+                    ctx.fillStyle = 'rgba(90, 160, 255, 0.8)';
+                    ctx.fillRect(video.x - 5, video.y - 5, handleSize, handleSize);
+                    ctx.fillRect(video.x + video.width + 5 - handleSize, video.y - 5, handleSize, handleSize);
+                    ctx.fillRect(video.x - 5, video.y + video.height + 5 - handleSize, handleSize, handleSize);
+                    ctx.fillRect(video.x + video.width + 5 - handleSize, video.y + video.height + 5 - handleSize, handleSize, handleSize);
+                    
+                    ctx.beginPath();
+                    const rotHandleX = video.x + video.width / 2;
+                    const rotHandleY = video.y - 30;
+                    ctx.arc(rotHandleX, rotHandleY, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.lineWidth = 2;
+                    ctx.moveTo(video.x + video.width / 2, video.y - 5);
+                    ctx.lineTo(rotHandleX, rotHandleY);
+                    ctx.stroke();
+                }
+                
+                ctx.restore();
                 frame.close();
             }
 
@@ -858,13 +923,25 @@
                     hudX = canvas.width / 2 - hudWidth / 2;
                     hudY = 20;
                 }
-                
-                hudRenderer.render(ctx, telemetry, hudX, hudY, 1.0);
-                
-                if (draggedHud || isHoveringHud) {
+
+                hudRenderer.render(ctx, telemetry, hudX, hudY, hudScale);
+
+                if (draggedHud || isHoveringHud || resizingHudCorner) {
                     ctx.strokeStyle = 'rgba(90, 160, 255, 0.6)';
                     ctx.lineWidth = 2;
                     ctx.strokeRect(hudX - 5, hudY - 5, hudWidth + 10, hudHeight + 10);
+                    
+                    // Draw corner resize handles
+                    const handleSize = 12;
+                    ctx.fillStyle = 'rgba(90, 160, 255, 0.8)';
+                    // Top-left
+                    ctx.fillRect(hudX - 5, hudY - 5, handleSize, handleSize);
+                    // Top-right
+                    ctx.fillRect(hudX + hudWidth + 5 - handleSize, hudY - 5, handleSize, handleSize);
+                    // Bottom-left
+                    ctx.fillRect(hudX - 5, hudY + hudHeight + 5 - handleSize, handleSize, handleSize);
+                    // Bottom-right
+                    ctx.fillRect(hudX + hudWidth + 5 - handleSize, hudY + hudHeight + 5 - handleSize, handleSize, handleSize);
                 }
             }
         }
@@ -896,10 +973,10 @@
                         error: reject
                     });
 
-                    video.decoder.configure({ 
-                        codec: video.config.codec, 
-                        codedWidth: video.config.width, 
-                        codedHeight: video.config.height 
+                    video.decoder.configure({
+                        codec: video.config.codec,
+                        codedWidth: video.config.width,
+                        codedHeight: video.config.height
                     });
 
                     for (let i = keyIdx; i <= frameIdx; i++) {
@@ -920,16 +997,16 @@
             const data = frame.keyframe
                 ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
                 : DashcamMP4.concat(sc, frame.data);
-            return new EncodedVideoChunk({ 
-                type: frame.keyframe ? 'key' : 'delta', 
-                timestamp: frame.index * 33333, 
-                data 
+            return new EncodedVideoChunk({
+                type: frame.keyframe ? 'key' : 'delta',
+                timestamp: frame.index * 33333,
+                data
             });
         }
 
         function applyLayout() {
             if (!videos.length) return;
-            
+
             const cols = Math.ceil(Math.sqrt(videos.length));
             const rows = Math.ceil(videos.length / cols);
             const cellWidth = canvas.width / cols;
@@ -938,11 +1015,11 @@
             videos.forEach((video, i) => {
                 const col = i % cols;
                 const row = Math.floor(i / cols);
-                
+
                 const aspectRatio = video.config.width / video.config.height;
                 let width = cellWidth - 20;
                 let height = width / aspectRatio;
-                
+
                 if (height > cellHeight - 20) {
                     height = cellHeight - 20;
                     width = height * aspectRatio;
@@ -976,9 +1053,36 @@
                 exportBtn.disabled = true;
                 exportStatus.textContent = 'Preparing export...';
 
+                const format = exportFormat.value;
+                let mimeType, fileExt;
+                
+                switch (format) {
+                    case 'webm-vp9':
+                        mimeType = 'video/webm;codecs=vp9';
+                        fileExt = 'webm';
+                        break;
+                    case 'webm-vp8':
+                        mimeType = 'video/webm;codecs=vp8';
+                        fileExt = 'webm';
+                        break;
+                    case 'webm-h264':
+                        mimeType = 'video/webm;codecs=h264';
+                        fileExt = 'webm';
+                        break;
+                    default:
+                        mimeType = 'video/webm;codecs=vp9';
+                        fileExt = 'webm';
+                }
+
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    alert(`Format ${format} is not supported by your browser. Falling back to VP9.`);
+                    mimeType = 'video/webm;codecs=vp9';
+                    fileExt = 'webm';
+                }
+
                 const stream = canvas.captureStream(30);
                 mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: 'video/webm;codecs=vp9',
+                    mimeType: mimeType,
                     videoBitsPerSecond: 8000000
                 });
 
@@ -988,15 +1092,15 @@
                 };
 
                 mediaRecorder.onstop = () => {
-                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                    const blob = new Blob(recordedChunks, { type: mimeType });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
                     const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
-                    a.download = `dashcam_export${cropSuffix}_${Date.now()}.webm`;
+                    a.download = `dashcam_export${cropSuffix}_${Date.now()}.${fileExt}`;
                     a.click();
                     URL.revokeObjectURL(url);
-                    
+
                     exportStatus.textContent = 'Export complete!';
                     exportBtn.disabled = false;
                     mediaRecorder = null;
@@ -1011,11 +1115,11 @@
                 pause();
                 currentFrameIndex = startFrame;
                 slider.value = startFrame;
-                
+
                 await recordFrames(startFrame, endFrame);
-                
+
                 mediaRecorder.stop();
-                
+
             } catch (err) {
                 alert(`Export failed: ${err.message}`);
                 exportStatus.textContent = 'Export failed';
@@ -1026,17 +1130,17 @@
 
         async function recordFrames(start, end) {
             const frameDelay = 1000 / 30; // 33.33ms for 30fps
-            
+
             for (let i = start; i <= end; i++) {
                 if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
-                
+
                 const frameStartTime = performance.now();
-                
+
                 currentFrameIndex = i;
                 slider.value = i;
                 await showFrame(i);
                 exportStatus.textContent = `Recording frame ${i - start + 1} / ${end - start + 1}`;
-                
+
                 // Wait for next frame interval to maintain consistent 30fps
                 const elapsed = performance.now() - frameStartTime;
                 const waitTime = Math.max(0, frameDelay - elapsed);
@@ -1048,10 +1152,18 @@
 
         canvas.addEventListener('mousedown', handleCanvasMouseDown);
         let draggedVideo = null;
+        let selectedVideo = null;
+        let resizingVideoCorner = null;
+        let rotatingVideo = null;
         let draggedHud = false;
         let isHoveringHud = false;
         let dragOffsetX = 0;
         let dragOffsetY = 0;
+        let initialHudScale = 1.0;
+        let initialVideoScale = 1.0;
+        let initialVideoRotation = 0;
+        let initialMouseX = 0;
+        let initialMouseY = 0;
 
         function handleCanvasMouseDown(e) {
             const rect = canvas.getBoundingClientRect();
@@ -1060,32 +1172,89 @@
             const x = (e.clientX - rect.left) * scaleX;
             const y = (e.clientY - rect.top) * scaleY;
 
-            if (hudVisible && hudX !== null && hudY !== null &&
-                x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight) {
-                draggedHud = true;
-                dragOffsetX = x - hudX;
-                dragOffsetY = y - hudY;
-                canvas.style.cursor = 'move';
-                return;
+            if (hudVisible && hudX !== null && hudY !== null) {
+                const handleSize = 12;
+                const corners = {
+                    'tl': { x: hudX - 5, y: hudY - 5 },
+                    'tr': { x: hudX + hudWidth + 5 - handleSize, y: hudY - 5 },
+                    'bl': { x: hudX - 5, y: hudY + hudHeight + 5 - handleSize },
+                    'br': { x: hudX + hudWidth + 5 - handleSize, y: hudY + hudHeight + 5 - handleSize }
+                };
+                
+                for (const [corner, pos] of Object.entries(corners)) {
+                    if (x >= pos.x && x <= pos.x + handleSize && y >= pos.y && y <= pos.y + handleSize) {
+                        resizingHudCorner = corner;
+                        initialHudScale = hudScale;
+                        initialMouseX = x;
+                        initialMouseY = y;
+                        return;
+                    }
+                }
+                
+                if (x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight) {
+                    draggedHud = true;
+                    dragOffsetX = x - hudX;
+                    dragOffsetY = y - hudY;
+                    canvas.style.cursor = 'move';
+                    return;
+                }
             }
 
             const sortedVideos = [...videos].sort((a, b) => b.zIndex - a.zIndex);
-            
+
             for (const v of sortedVideos) {
                 if (!v.visible) continue;
+                
+                if (selectedVideo === v) {
+                    const handleSize = 12;
+                    const corners = {
+                        'tl': { x: v.x - 5, y: v.y - 5 },
+                        'tr': { x: v.x + v.width + 5 - handleSize, y: v.y - 5 },
+                        'bl': { x: v.x - 5, y: v.y + v.height + 5 - handleSize },
+                        'br': { x: v.x + v.width + 5 - handleSize, y: v.y + v.height + 5 - handleSize }
+                    };
+                    
+                    for (const [corner, pos] of Object.entries(corners)) {
+                        if (x >= pos.x && x <= pos.x + handleSize && y >= pos.y && y <= pos.y + handleSize) {
+                            resizingVideoCorner = corner;
+                            initialVideoScale = v.scale;
+                            initialMouseX = x;
+                            initialMouseY = y;
+                            return;
+                        }
+                    }
+                    
+                    const rotHandleX = v.x + v.width / 2;
+                    const rotHandleY = v.y - 30;
+                    const dist = Math.sqrt((x - rotHandleX) ** 2 + (y - rotHandleY) ** 2);
+                    if (dist <= 8) {
+                        rotatingVideo = v;
+                        initialVideoRotation = v.rotation;
+                        initialMouseX = x;
+                        initialMouseY = y;
+                        return;
+                    }
+                }
+                
                 if (x >= v.x && x <= v.x + v.width && y >= v.y && y <= v.y + v.height) {
                     draggedVideo = v;
+                    selectedVideo = v;
                     dragOffsetX = x - v.x;
                     dragOffsetY = y - v.y;
                     canvas.style.cursor = 'move';
-                    
+
                     const maxZ = Math.max(...videos.map(vid => vid.zIndex));
                     if (v.zIndex < maxZ) {
                         v.zIndex = maxZ + 1;
-                        showFrame(currentFrameIndex);
                     }
+                    showFrame(currentFrameIndex);
                     break;
                 }
+            }
+            
+            if (!draggedVideo && !draggedHud) {
+                selectedVideo = null;
+                showFrame(currentFrameIndex);
             }
         }
 
@@ -1097,9 +1266,73 @@
             const x = (e.clientX - rect.left) * scaleX;
             const y = (e.clientY - rect.top) * scaleY;
 
+            if (resizingHudCorner) {
+                const baseWidth = 420;
+                const baseHeight = 210;
+                let deltaX = x - initialMouseX;
+                let deltaY = y - initialMouseY;
+                
+                if (resizingHudCorner === 'tl') {
+                    deltaX = -deltaX;
+                    deltaY = -deltaY;
+                } else if (resizingHudCorner === 'tr') {
+                    deltaY = -deltaY;
+                } else if (resizingHudCorner === 'bl') {
+                    deltaX = -deltaX;
+                }
+                
+                const avgDelta = (deltaX + deltaY) / 2;
+                const newScale = Math.max(0.3, Math.min(2.0, initialHudScale + avgDelta / 200));
+                hudScale = newScale;
+                
+                const size = hudRenderer.getSize(hudScale);
+                hudWidth = size.width;
+                hudHeight = size.height;
+                
+                clampHudToCanvas();
+                showFrame(currentFrameIndex);
+                return;
+            }
+
             if (draggedHud) {
                 hudX = Math.max(0, Math.min(canvas.width - hudWidth, x - dragOffsetX));
                 hudY = Math.max(0, Math.min(canvas.height - hudHeight, y - dragOffsetY));
+                showFrame(currentFrameIndex);
+                return;
+            }
+
+            if (resizingVideoCorner && selectedVideo) {
+                let deltaX = x - initialMouseX;
+                let deltaY = y - initialMouseY;
+                
+                if (resizingVideoCorner === 'tl') {
+                    deltaX = -deltaX;
+                    deltaY = -deltaY;
+                } else if (resizingVideoCorner === 'tr') {
+                    deltaY = -deltaY;
+                } else if (resizingVideoCorner === 'bl') {
+                    deltaX = -deltaX;
+                }
+                
+                const avgDelta = (deltaX + deltaY) / 2;
+                const newScale = Math.max(0.1, Math.min(3.0, initialVideoScale + avgDelta / 200));
+                selectedVideo.scale = newScale;
+                selectedVideo.width = selectedVideo.config.width * newScale;
+                selectedVideo.height = selectedVideo.config.height * newScale;
+                
+                showFrame(currentFrameIndex);
+                return;
+            }
+            
+            if (rotatingVideo) {
+                const centerX = rotatingVideo.x + rotatingVideo.width / 2;
+                const centerY = rotatingVideo.y + rotatingVideo.height / 2;
+                
+                const angle1 = Math.atan2(initialMouseY - centerY, initialMouseX - centerX);
+                const angle2 = Math.atan2(y - centerY, x - centerX);
+                const deltaAngle = (angle2 - angle1) * (180 / Math.PI);
+                
+                rotatingVideo.rotation = (initialVideoRotation + deltaAngle) % 360;
                 showFrame(currentFrameIndex);
                 return;
             }
@@ -1112,12 +1345,34 @@
             }
 
             const wasHoveringHud = isHoveringHud;
-            isHoveringHud = hudVisible && hudX !== null && hudY !== null &&
-                           x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight;
+            isHoveringHud = false;
+            let cornerHover = false;
             
-            if (isHoveringHud) {
-                canvas.style.cursor = 'move';
-            } else {
+            if (hudVisible && hudX !== null && hudY !== null) {
+                const handleSize = 12;
+                const corners = {
+                    'tl': { x: hudX - 5, y: hudY - 5, cursor: 'nwse-resize' },
+                    'tr': { x: hudX + hudWidth + 5 - handleSize, y: hudY - 5, cursor: 'nesw-resize' },
+                    'bl': { x: hudX - 5, y: hudY + hudHeight + 5 - handleSize, cursor: 'nesw-resize' },
+                    'br': { x: hudX + hudWidth + 5 - handleSize, y: hudY + hudHeight + 5 - handleSize, cursor: 'nwse-resize' }
+                };
+                
+                for (const [corner, pos] of Object.entries(corners)) {
+                    if (x >= pos.x && x <= pos.x + handleSize && y >= pos.y && y <= pos.y + handleSize) {
+                        canvas.style.cursor = pos.cursor;
+                        cornerHover = true;
+                        isHoveringHud = true;
+                        break;
+                    }
+                }
+                
+                if (!cornerHover && x >= hudX && x <= hudX + hudWidth && y >= hudY && y <= hudY + hudHeight) {
+                    canvas.style.cursor = 'move';
+                    isHoveringHud = true;
+                }
+            }
+            
+            if (!isHoveringHud && !cornerHover) {
                 canvas.style.cursor = 'default';
             }
 
@@ -1134,6 +1389,15 @@
             }
             if (draggedHud) {
                 draggedHud = false;
+            }
+            if (resizingHudCorner) {
+                resizingHudCorner = null;
+            }
+            if (resizingVideoCorner) {
+                resizingVideoCorner = null;
+            }
+            if (rotatingVideo) {
+                rotatingVideo = null;
             }
             canvas.style.cursor = 'default';
         }

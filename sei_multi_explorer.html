@@ -1234,7 +1234,7 @@
         let lastMouseX = 0;
         let lastMouseY = 0;
         let activeSnapZone = null;
-        const snapThreshold = 40;
+        const snapThreshold = 15;
 
         function handleCanvasMouseDown(e) {
             const rect = canvas.getBoundingClientRect();
@@ -1416,6 +1416,8 @@
                 
                 const deltaX = x - lastMouseX;
                 const deltaY = y - lastMouseY;
+                
+                // Show snap zone only when actively near edge
                 activeSnapZone = detectSnapZone(draggedVideo, deltaX, deltaY);
                 
                 lastMouseX = x;
@@ -1508,19 +1510,23 @@
             const nearTop = top < snapThreshold;
             const nearBottom = bottom > ch - snapThreshold;
             
-            const movingLeft = deltaX < -1;
-            const movingRight = deltaX > 1;
-            const movingUp = deltaY < -1;
-            const movingDown = deltaY > 1;
+            const movingLeft = deltaX < -0.5;
+            const movingRight = deltaX > 0.5;
+            const movingUp = deltaY < -0.5;
+            const movingDown = deltaY > 0.5;
+            const notMovingAway = Math.abs(deltaX) < 3 && Math.abs(deltaY) < 3;
             
-            if (nearLeft && movingLeft && nearTop && movingUp) return 'top-left';
-            if (nearRight && movingRight && nearTop && movingUp) return 'top-right';
-            if (nearLeft && movingLeft && nearBottom && movingDown) return 'bottom-left';
-            if (nearRight && movingRight && nearBottom && movingDown) return 'bottom-right';
-            if (nearLeft && movingLeft) return 'left';
-            if (nearRight && movingRight) return 'right';
-            if (nearTop && movingUp) return 'top';
-            if (nearBottom && movingDown) return 'bottom';
+            // Corner snaps - require both edges near and general movement intent or stillness
+            if (nearLeft && nearTop && (movingLeft || movingUp || notMovingAway)) return 'top-left';
+            if (nearRight && nearTop && (movingRight || movingUp || notMovingAway)) return 'top-right';
+            if (nearLeft && nearBottom && (movingLeft || movingDown || notMovingAway)) return 'bottom-left';
+            if (nearRight && nearBottom && (movingRight || movingDown || notMovingAway)) return 'bottom-right';
+            
+            // Edge snaps - require edge near and movement intent or stillness
+            if (nearLeft && (movingLeft || notMovingAway)) return 'left';
+            if (nearRight && (movingRight || notMovingAway)) return 'right';
+            if (nearTop && (movingUp || notMovingAway)) return 'top';
+            if (nearBottom && (movingDown || notMovingAway)) return 'bottom';
             
             return null;
         }
@@ -1620,10 +1626,10 @@
                     break;
             }
             
-            ctx.fillStyle = 'rgba(90, 160, 255, 0.15)';
+            ctx.fillStyle = 'rgba(90, 160, 255, 0.2)';
             ctx.fillRect(x, y, w, h);
-            ctx.strokeStyle = 'rgba(90, 160, 255, 0.6)';
-            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(90, 160, 255, 0.8)';
+            ctx.lineWidth = 4;
             ctx.strokeRect(x, y, w, h);
         }
 

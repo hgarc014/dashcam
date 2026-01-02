@@ -687,9 +687,17 @@
 
                 const config = mp4.getConfig();
 
+                const timestampMatch = file.name.match(/(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})/);
+                let timestamp = null;
+                if (timestampMatch) {
+                    const [, date, time] = timestampMatch;
+                    timestamp = `${date} ${time.replace(/-/g, ':')}`;
+                }
+                
                 const videoObj = {
                     id: Date.now() + Math.random(),
                     name: file.name,
+                    timestamp,
                     mp4,
                     frames,
                     config,
@@ -853,6 +861,8 @@
             const decodedFrames = [];
             let currentSei = null;
 
+            let currentVideoTimestamp = null;
+            
             for (const video of sortedVideos) {
                 if (!video.visible) continue;
                 const frameIdx = Math.min(index, video.frames.length - 1);
@@ -863,6 +873,21 @@
 
                 if (!currentSei && video.frames[frameIdx].sei) {
                     currentSei = video.frames[frameIdx].sei;
+                    
+                    if (video.timestamp) {
+                        const secondsElapsed = Math.floor(frameIdx / 30);
+                        const baseDate = new Date(video.timestamp);
+                        const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
+                        
+                        const year = currentDate.getFullYear();
+                        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                        const day = String(currentDate.getDate()).padStart(2, '0');
+                        const hours = String(currentDate.getHours()).padStart(2, '0');
+                        const minutes = String(currentDate.getMinutes()).padStart(2, '0');
+                        const seconds = String(currentDate.getSeconds()).padStart(2, '0');
+                        
+                        currentVideoTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                    }
                 }
             }
 
@@ -917,7 +942,7 @@
                     const displayValue = value != null ? DashcamHelpers.formatValue(value, enumMap) : '—';
                     fields[propName] = { value, displayValue };
                 }
-                const telemetry = { ...currentSei, fields };
+                const telemetry = { ...currentSei, fields, timestamp: currentVideoTimestamp };
                 
                 if (hudX === null || hudY === null) {
                     hudX = canvas.width / 2 - hudWidth / 2;

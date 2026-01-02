@@ -69,7 +69,8 @@
       brake: pickBool(raw, ["brakeApplied"]),
       throttlePct: clamp(throttleRaw, 0, 100),
       autopilotState: pickString(raw, ["autopilotState"]),
-      gear: gearMapping[pickString(raw?.fields?.gearState, ["displayValue"])] || "—"
+      gear: gearMapping[pickString(raw?.fields?.gearState, ["displayValue"])] || "—",
+      timestamp: raw?.timestamp || null
     };
   }
 
@@ -121,8 +122,17 @@
 
       const cx = cardWidth / 2;
 
+      // --- timestamp at top ---
+      if (t.timestamp) {
+        ctx.font = "600 13px system-ui";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(t.timestamp, cx, 12);
+      }
+
       // --- top row layout ---
-      const topRowY = 70;
+      const topRowY = 80;
 
       // Gear circle (left)
       this.drawGearCircle(ctx, 55, topRowY - 25, t.gear);
@@ -136,8 +146,8 @@
       this.drawWheelCircle(ctx, cardWidth - 55, topRowY - 25, t.steerDeg);
 
       // --- bottom row icons ---
-      this.drawBrakeCircle(ctx, 70, 150, t.brake);
-      this.drawThrottleCircle(ctx, cardWidth - 70, 150, t.throttlePct);
+      this.drawBrakeCircle(ctx, 70, 160, t.brake);
+      this.drawThrottleCircle(ctx, cardWidth - 70, 160, t.throttlePct);
 
       // --- label ---
       // In your screenshot it always shows when AP is active; tweak rule as you want

@@ -747,17 +747,36 @@
 
         const sorted = getSortedVideos();
         for (const video of sorted) {
-            (async () => {
-                for (let i = start; i <= end; i++) {
-                    if (!playing) return;
-                    if (token !== playbackPrefetchToken) return;
-                    await ensureFrameCached(video, Math.min(i, video.frames.length - 1));
-                }
-            })();
+            if (!video.visible) continue;
+            video.prefetchToken = token;
+            video.prefetchTargetStart = start;
+            video.prefetchTargetEnd = end;
+            if (!video.prefetchRunning) {
+                video.prefetchRunning = true;
+                (async () => {
+                    try {
+                        while (playing && video.prefetchToken === playbackPrefetchToken) {
+                            const s = video.prefetchTargetStart;
+                            const e = Math.min(video.prefetchTargetEnd, video.frames.length - 1);
+                            if (video.prefetchNext == null || video.prefetchNext < s) {
+                                video.prefetchNext = s;
+                            }
+                            if (video.prefetchNext > e) break;
+                            const idx = video.prefetchNext;
+                            video.prefetchNext++;
+                            await ensureFrameCached(video, idx);
+                            await Promise.resolve();
+                        }
+                    } finally {
+                        video.prefetchRunning = false;
+                    }
+                })();
+            }
         }
     }
 
     let hudRenderer = new SeiCanvasHud();
+    const hudTelemetryCache = new WeakMap();
     let mediaRecorder = null;
     let recordedChunks = [];
     let exportCancelled = false;
@@ -1583,7 +1602,7 @@
                 if (!currentSei && video.frames[frameIdx]?.sei) {
                     currentSei = video.frames[frameIdx].sei;
                     if (video.timestamp) {
-                        const secondsElapsed = Math.floor(frameIdx / 30);
+                        const secondsElapsed = getSecondsElapsed(video, frameIdx);
                         const baseDate = new Date(video.timestamp);
                         const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
                         const year = currentDate.getFullYear();
@@ -1627,7 +1646,7 @@
                     currentSei = video.frames[frameIdx].sei;
 
                     if (video.timestamp) {
-                        const secondsElapsed = Math.floor(frameIdx / 30);
+                        const secondsElapsed = getSecondsElapsed(video, frameIdx);
                         const baseDate = new Date(video.timestamp);
                         const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
                         const year = currentDate.getFullYear();
@@ -1658,23 +1677,27 @@
                 console.warn(`Skipping detached bitmap for ${video.name}`);
                 continue;
             }
-            
-            ctx.save();
+
             if (video.rotation !== 0) {
+                ctx.save();
                 const centerX = video.x + video.width / 2;
                 const centerY = video.y + video.height / 2;
                 ctx.translate(centerX, centerY);
                 ctx.rotate((video.rotation * Math.PI) / 180);
                 ctx.translate(-centerX, -centerY);
+                try {
+                    ctx.drawImage(bmp, video.x, video.y, video.width, video.height);
+                } catch (err) {
+                    console.warn(`Failed to draw ${video.name}:`, err.message);
+                }
+                ctx.restore();
+            } else {
+                try {
+                    ctx.drawImage(bmp, video.x, video.y, video.width, video.height);
+                } catch (err) {
+                    console.warn(`Failed to draw ${video.name}:`, err.message);
+                }
             }
-            
-            try {
-                ctx.drawImage(bmp, video.x, video.y, video.width, video.height);
-            } catch (err) {
-                console.warn(`Failed to draw ${video.name}:`, err.message);
-            }
-            
-            ctx.restore();
         }
 
         // Draw selection handles + hud + snap overlay (render-only)
@@ -1742,20 +1765,26 @@
 
         // HUD
         if (currentSei && hudVisible && seiFields) {
-            let fields = {};
-            for (const {propName, enumMap} of seiFields) {
-                const value = currentSei?.[propName];
-                const displayValue = value != null ? DashcamHelpers.formatValue(value, enumMap) : '—';
-                fields[propName] = {value, displayValue};
+            let fields = hudTelemetryCache.get(currentSei);
+            if (!fields) {
+                fields = {};
+                for (const {propName, enumMap} of seiFields) {
+                    const value = currentSei?.[propName];
+                    const displayValue = value != null ? DashcamHelpers.formatValue(value, enumMap) : '—';
+                    fields[propName] = {value, displayValue};
+                }
+                hudTelemetryCache.set(currentSei, fields);
             }
-            const telemetry = {...currentSei, fields, timestamp: currentVideoTimestamp};
+
+            currentSei.fields = fields;
+            currentSei.timestamp = currentVideoTimestamp;
 
             if (hudX === null || hudY === null) {
                 hudX = canvas.width / 2 - hudWidth / 2;
                 hudY = 20;
             }
 
-            hudRenderer.render(ctx, telemetry, hudX, hudY, hudScale);
+            hudRenderer.render(ctx, currentSei, hudX, hudY, hudScale);
 
             if (draggedHud || isHoveringHud || resizingHudCorner) {
                 ctx.strokeStyle = 'rgba(90, 160, 255, 0.6)';
@@ -1995,6 +2024,11 @@
             return config.timestampsUs[frameIndex];
         }
         return frameIndex * 33333;
+    }
+
+    function getSecondsElapsed(video, frameIdx) {
+        const us = getFrameTimestamp(frameIdx, video.config);
+        return Math.floor(us / 1_000_000);
     }
 
     function createChunk(frame, config) {

@@ -633,7 +633,7 @@
 
 <!-- Debug Panel -->
 <button id="debugToggle" style="position: fixed; bottom: 10px; right: 10px; z-index: 10000; padding: 8px 12px; background: #333; color: #0f0; border: 1px solid #0f0; border-radius: 4px; font-family: monospace; cursor: pointer;">Debug</button>
-<div id="debugPanel" style="display: none; position: fixed; bottom: 50px; right: 10px; width: 90%; max-width: 600px; height: 400px; background: rgba(0, 0, 0, 0.95); border: 2px solid #0f0; border-radius: 4px; z-index: 9999; font-family: monospace; font-size: 11px; color: #0f0; overflow: hidden; display: flex; flex-direction: column;">
+<div id="debugPanel" style="display: none; position: fixed; bottom: 50px; right: 10px; width: 90%; max-width: 600px; height: 400px; background: rgba(0, 0, 0, 0.95); border: 2px solid #0f0; border-radius: 4px; z-index: 9999; font-family: monospace; font-size: 11px; color: #0f0; overflow: hidden; flex-direction: column;">
     <div style="padding: 8px; background: #111; border-bottom: 1px solid #0f0; display: flex; justify-content: space-between; align-items: center;">
         <span>Debug Console</span>
         <div>
@@ -1063,6 +1063,7 @@
                 config,
                 decoder: null,
                 lastDecodedFrame: undefined,
+                needsKeyframe: true,
                 firstKeyframe,
                 x: col * cellWidth + (cellWidth - videoWidth) / 2,
                 y: row * cellHeight + (cellHeight - videoHeight) / 2,
@@ -1263,7 +1264,7 @@
                 } catch (err) {
                     console.error('Playback error at frame', currentFrameIndex, err);
                 }
-                
+
                 const fps = (isMobile && videos.length > 2) ? 15 : 30;
                 const delay = 1000 / fps;
                 playTimer = setTimeout(playNext, delay);
@@ -1280,6 +1281,7 @@
         
         const frameStart = performance.now();
         console.log(`[PlayNext] About to call showFrame for frame ${currentFrameIndex}`);
+        let frameTime = 0;
         
         try {
             // Add timeout to prevent infinite hangs - shorter on mobile
@@ -1290,8 +1292,8 @@
             );
             
             await Promise.race([framePromise, timeoutPromise]);
-            
-            const frameTime = performance.now() - frameStart;
+
+            frameTime = performance.now() - frameStart;
             console.log(`[PlayNext] Frame ${currentFrameIndex} completed in ${frameTime.toFixed(1)}ms`);
         } catch (err) {
             console.warn('[PlayNext] Decode timeout at frame', currentFrameIndex);
@@ -1315,15 +1317,20 @@
             }
         }
         
+        if (!frameTime) {
+            frameTime = performance.now() - frameStart;
+        }
+        
         // Mobile: adjust playback speed based on frame skip
         const baseFps = (isMobile && videos.length > 2) ? 15 : 30;
         const frameSkip = (isMobile && videos.length > 1) ? (videos.length > 2 ? 4 : 2) : 1;
         const delay = (1000 / baseFps) * frameSkip;
-        console.log(`[PlayNext] About to schedule next frame with ${delay}ms delay, baseFps: ${baseFps}, skip: ${frameSkip}`);
+        const nextDelay = Math.max(0, delay - frameTime);
+        console.log(`[PlayNext] About to schedule next frame with ${nextDelay}ms delay, baseFps: ${baseFps}, skip: ${frameSkip}`);
         playTimer = setTimeout(() => {
             console.log(`[PlayNext] setTimeout fired, calling playNext`);
             playNext();
-        }, delay);
+        }, nextDelay);
     }
 
     // ---------- Rendering vs Decoding ----------
@@ -1606,7 +1613,7 @@
             while (keyIdx >= 0 && !video.frames[keyIdx].keyframe) keyIdx--;
             if (keyIdx < 0) return null;
 
-            const targetTs = video.frames[frameIdx].index * 33333;
+            const targetTs = getFrameTimestamp(video.frames[frameIdx].index, video.config);
 
             // Optimization: if this frame is sequential to last decoded, just decode this one frame
             // Only flush and restart from keyframe when jumping or seeking
@@ -1682,10 +1689,12 @@
                 });
 
                 console.log(`[Decoder] Configuring ${video.name}: codec=${video.config.codec}, size=${video.config.width}x${video.config.height}`);
+                const description = buildAvcCDescription(video.config.sps, video.config.pps);
                 video.decoder.configure({
                     codec: video.config.codec,
                     codedWidth: video.config.width,
-                    codedHeight: video.config.height
+                    codedHeight: video.config.height,
+                    description: description
                 });
                 console.log(`[Decoder] Configuration complete for ${video.name}`);
             }
@@ -1764,9 +1773,8 @@
                 if (isSequential) {
                     video.needsKeyframe = false;
                 } else {
-                    // Non-sequential decode with flush completed successfully
-                    // Next frame can now decode sequentially (no keyframe needed)
-                    video.needsKeyframe = false;
+                    // Non-sequential decode with flush - decoder state is reset, needs keyframe next
+                    video.needsKeyframe = true;
                 }
                 
                 return best;
@@ -1786,15 +1794,50 @@
         }
     }
 
+    function buildAvcCDescription(sps, pps) {
+        const spsLen = sps.length;
+        const ppsLen = pps.length;
+        const totalLen = 11 + spsLen + ppsLen;
+        const desc = new Uint8Array(totalLen);
+        
+        let offset = 0;
+        desc[offset++] = 1;
+        desc[offset++] = sps[1];
+        desc[offset++] = sps[2];
+        desc[offset++] = sps[3];
+        desc[offset++] = 0xFF;
+        desc[offset++] = 0xE1;
+        desc[offset++] = (spsLen >> 8) & 0xFF;
+        desc[offset++] = spsLen & 0xFF;
+        desc.set(sps, offset);
+        offset += spsLen;
+        desc[offset++] = 1;
+        desc[offset++] = (ppsLen >> 8) & 0xFF;
+        desc[offset++] = ppsLen & 0xFF;
+        desc.set(pps, offset);
+        
+        return desc;
+    }
+
+    function getFrameTimestamp(frameIndex, config) {
+        let timestampMs = 0;
+        for (let i = 0; i < frameIndex && i < config.durations.length; i++) {
+            timestampMs += config.durations[i];
+        }
+        return timestampMs * 1000;
+    }
+
     function createChunk(frame, config) {
-        const sc = new Uint8Array([0, 0, 0, 1]);
-        const data = frame.keyframe
-            ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
-            : DashcamMP4.concat(sc, frame.data);
+        const nalData = frame.data;
+        const lengthPrefix = new Uint8Array(4);
+        const view = new DataView(lengthPrefix.buffer);
+        view.setUint32(0, nalData.length);
+        
+        const data = DashcamMP4.concat(lengthPrefix, nalData);
 
         return new EncodedVideoChunk({
             type: frame.keyframe ? 'key' : 'delta',
-            timestamp: frame.index * 33333,
+            timestamp: getFrameTimestamp(frame.index, config),
             data
         });
     }

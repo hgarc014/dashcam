@@ -681,8 +681,8 @@
 
     let draggingCropMarker = null;
 
-    // ---------- ImageBitmap cache (LRU, small for mobile) ----------
-    const MAX_CACHE_PER_VIDEO = 12;
+    // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
+    const MAX_CACHE_PER_VIDEO = 20; // Increased for better multi-video performance
 
     function ensureCache(video) {
         if (!video.bitmapCache) {
@@ -1232,6 +1232,12 @@
 
         // Draw frames (cached ImageBitmaps)
         for (const {video, bmp} of drawList) {
+            // Check if bitmap is still valid (not detached)
+            if (!bmp || bmp.width === 0 || bmp.height === 0) {
+                console.warn(`Skipping detached bitmap for ${video.name}`);
+                continue;
+            }
+            
             ctx.save();
             if (video.rotation !== 0) {
                 const centerX = video.x + video.width / 2;
@@ -1240,7 +1246,13 @@
                 ctx.rotate((video.rotation * Math.PI) / 180);
                 ctx.translate(-centerX, -centerY);
             }
-            ctx.drawImage(bmp, video.x, video.y, video.width, video.height);
+            
+            try {
+                ctx.drawImage(bmp, video.x, video.y, video.width, video.height);
+            } catch (err) {
+                console.warn(`Failed to draw ${video.name}:`, err.message);
+            }
+            
             ctx.restore();
         }
 
@@ -1340,32 +1352,7 @@
     }
 
     // ---------- Decoder: timestamp-based target selection ----------
-    // Queue to prevent overlapping decode operations per video
     async function decodeFrame(video, frameIdx) {
-        // If a decode is already in progress, wait for it
-        if (video.decodeInProgress) {
-            await video.decodeInProgress;
-        }
-        
-        // Create a promise for this decode operation
-        let resolveDecodePromise;
-        video.decodeInProgress = new Promise(resolve => {
-            resolveDecodePromise = resolve;
-        });
-        
-        try {
-            const result = await decodeFrameInternal(video, frameIdx);
-            resolveDecodePromise();
-            video.decodeInProgress = null;
-            return result;
-        } catch (err) {
-            resolveDecodePromise();
-            video.decodeInProgress = null;
-            throw err;
-        }
-    }
-    
-    async function decodeFrameInternal(video, frameIdx) {
         try {
             let keyIdx = frameIdx;
             while (keyIdx >= 0 && !video.frames[keyIdx].keyframe) keyIdx--;

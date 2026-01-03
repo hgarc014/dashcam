@@ -1128,7 +1128,7 @@
         }
     }
 
-    function playNext() {
+    async function playNext() {
         if (!playing) return;
 
         currentFrameIndex++;
@@ -1138,7 +1138,11 @@
             if (cropEnabled) {
                 currentFrameIndex = cropStart;
                 slider.value = currentFrameIndex;
-                showFrame(currentFrameIndex, {decode: true});
+                try {
+                    await showFrame(currentFrameIndex, {decode: true});
+                } catch (err) {
+                    console.error('Playback error at frame', currentFrameIndex, err);
+                }
                 
                 const fps = (isMobile && videos.length > 2) ? 15 : 30;
                 const delay = 1000 / fps;
@@ -1150,7 +1154,18 @@
         }
 
         slider.value = currentFrameIndex;
-        showFrame(currentFrameIndex, {decode: true});
+        
+        try {
+            await showFrame(currentFrameIndex, {decode: true});
+        } catch (err) {
+            console.error('Playback error at frame', currentFrameIndex, err);
+            if (isMobile) {
+                // On mobile errors, pause and alert user
+                pause();
+                alert(`Playback stopped at frame ${currentFrameIndex}: ${err.message}`);
+                return;
+            }
+        }
         
         // Mobile: slower playback for stability with multiple videos
         const fps = (isMobile && videos.length > 2) ? 15 : 30;
@@ -1186,18 +1201,24 @@
                 let bmp = cacheGet(video, frameIdx);
                 
                 if (!bmp) {
-                    const frame = await decodeFrame(video, frameIdx);
-                    if (frame) {
-                        try {
-                            bmp = await createImageBitmap(frame);
-                            cachePut(video, frameIdx, bmp);
-                        } catch (err) {
-                            console.error('createImageBitmap failed:', err);
-                        } finally {
+                    try {
+                        const frame = await decodeFrame(video, frameIdx);
+                        if (frame) {
                             try {
-                                frame.close();
-                            } catch {}
+                                bmp = await createImageBitmap(frame);
+                                cachePut(video, frameIdx, bmp);
+                            } catch (err) {
+                                console.error(`Mobile createImageBitmap failed for ${video.name} frame ${frameIdx}:`, err);
+                            } finally {
+                                try {
+                                    frame.close();
+                                } catch {}
+                            }
+                        } else {
+                            console.warn(`Mobile decode returned null for ${video.name} frame ${frameIdx}`);
                         }
+                    } catch (err) {
+                        console.error(`Mobile decode failed for ${video.name} frame ${frameIdx}:`, err);
                     }
                 }
                 

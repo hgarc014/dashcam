@@ -1147,10 +1147,11 @@
 
         currentFrameIndex++;
         
-        // Mobile optimization: skip every other frame to reduce decode load
+        // Mobile optimization: skip more frames to reduce decode load
         if (isMobile && videos.length > 1) {
-            currentFrameIndex++;
-            console.log('[Mobile] Skipping to frame', currentFrameIndex, 'for performance');
+            const skipAmount = videos.length > 2 ? 4 : 2; // Skip more frames with more videos
+            currentFrameIndex += skipAmount - 1; // -1 because we already incremented once
+            console.log('[Mobile] Skipping to frame', currentFrameIndex, 'skipAmount:', skipAmount);
         }
         
         const maxFrame = cropEnabled ? cropEnd : +slider.max;
@@ -1184,7 +1185,7 @@
         
         try {
             // Add timeout to prevent infinite hangs - shorter on mobile
-            const timeoutDuration = isMobile ? 2000 : 5000;
+            const timeoutDuration = isMobile ? 1000 : 5000;
             const framePromise = showFrame(currentFrameIndex, {decode: true});
             const timeoutPromise = new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('Frame decode timeout')), timeoutDuration)
@@ -1195,12 +1196,18 @@
             const frameTime = performance.now() - frameStart;
             console.log(`[PlayNext] Frame ${currentFrameIndex} completed in ${frameTime.toFixed(1)}ms`);
         } catch (err) {
-            console.warn('[PlayNext] Frame error at', currentFrameIndex, err.message);
+            console.warn('[PlayNext] Decode timeout at frame', currentFrameIndex);
             
             if (err.message.includes('timeout')) {
-                console.warn('[PlayNext] Frame timed out, skipping to next');
-                exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (skipped)`;
-                // Continue to next frame without pausing
+                // Fallback: try to render with cached frames only
+                try {
+                    console.log('[PlayNext] Attempting render-only with cache');
+                    await showFrame(currentFrameIndex, {decode: false});
+                    exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (cached)`;
+                } catch (renderErr) {
+                    console.warn('[PlayNext] Cache render also failed');
+                    exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (failed)`;
+                }
             } else {
                 console.error('[PlayNext] Fatal playback error:', err);
                 pause();
@@ -1210,10 +1217,9 @@
             }
         }
         
-        // Mobile: adjust playback speed
-        // Skip every other frame = 2x speed, so use 2x delay to maintain ~15 FPS
+        // Mobile: adjust playback speed based on frame skip
         const baseFps = (isMobile && videos.length > 2) ? 15 : 30;
-        const frameSkip = (isMobile && videos.length > 1) ? 2 : 1;
+        const frameSkip = (isMobile && videos.length > 1) ? (videos.length > 2 ? 4 : 2) : 1;
         const delay = (1000 / baseFps) * frameSkip;
         console.log(`[PlayNext] About to schedule next frame with ${delay}ms delay, baseFps: ${baseFps}, skip: ${frameSkip}`);
         playTimer = setTimeout(() => {

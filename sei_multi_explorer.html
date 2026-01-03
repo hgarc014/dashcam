@@ -681,8 +681,11 @@
 
     let draggingCropMarker = null;
 
+    // Mobile detection
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
+
     // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
-    const MAX_CACHE_PER_VIDEO = 20; // Increased for better multi-video performance
+    const MAX_CACHE_PER_VIDEO = isMobile ? 6 : 20; // Reduced cache for mobile performance
 
     function ensureCache(video) {
         if (!video.bitmapCache) {
@@ -1136,7 +1139,10 @@
                 currentFrameIndex = cropStart;
                 slider.value = currentFrameIndex;
                 showFrame(currentFrameIndex, {decode: true});
-                playTimer = setTimeout(playNext, 33);
+                
+                const fps = (isMobile && videos.length > 2) ? 15 : 30;
+                const delay = 1000 / fps;
+                playTimer = setTimeout(playNext, delay);
             } else {
                 pause();
             }
@@ -1145,7 +1151,11 @@
 
         slider.value = currentFrameIndex;
         showFrame(currentFrameIndex, {decode: true});
-        playTimer = setTimeout(playNext, 33);
+        
+        // Mobile: slower playback for stability with multiple videos
+        const fps = (isMobile && videos.length > 2) ? 15 : 30;
+        const delay = 1000 / fps;
+        playTimer = setTimeout(playNext, delay);
     }
 
     // ---------- Rendering vs Decoding ----------
@@ -1168,17 +1178,14 @@
         let currentSei = null;
         let currentVideoTimestamp = null;
 
-        for (const video of sortedVideos) {
-            if (!video.visible) continue;
-
-            const frameIdx = Math.min(index, video.frames.length - 1);
-
-            // Prefer cached bitmap
-            let bmp = cacheGet(video, frameIdx);
-
-            // Decode if cache miss (always decode during export/playback)
-            if (!bmp) {
-                if (decode) {
+        // Mobile optimization: decode sequentially to avoid overwhelming device
+        if (isMobile && decode) {
+            for (const video of sortedVideos) {
+                if (!video.visible) continue;
+                const frameIdx = Math.min(index, video.frames.length - 1);
+                let bmp = cacheGet(video, frameIdx);
+                
+                if (!bmp) {
                     const frame = await decodeFrame(video, frameIdx);
                     if (frame) {
                         try {
@@ -1189,39 +1196,86 @@
                         } finally {
                             try {
                                 frame.close();
-                            } catch {
-                            }
+                            } catch {}
                         }
-                    } else {
-                        console.warn(`decodeFrame returned null for ${video.name} frame ${frameIdx}`);
                     }
-                } else {
-                    // If decode=false but no cache, this will show black - try to decode anyway
-                    console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
+                }
+                
+                if (bmp) drawList.push({video, bmp});
+                
+                if (!currentSei && video.frames[frameIdx]?.sei) {
+                    currentSei = video.frames[frameIdx].sei;
+                    if (video.timestamp) {
+                        const secondsElapsed = Math.floor(frameIdx / 30);
+                        const baseDate = new Date(video.timestamp);
+                        const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
+                        const year = currentDate.getFullYear();
+                        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                        const day = String(currentDate.getDate()).padStart(2, '0');
+                        const hours = String(currentDate.getHours()).padStart(2, '0');
+                        const minutes = String(currentDate.getMinutes()).padStart(2, '0');
+                        const seconds = String(currentDate.getSeconds()).padStart(2, '0');
+                        currentVideoTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                    }
                 }
             }
+        } else {
+            // Desktop: parallel decode for better performance
+            for (const video of sortedVideos) {
+                if (!video.visible) continue;
 
-            if (bmp) {
-                drawList.push({video, bmp});
-            } else {
-                console.warn(`No bitmap available for ${video.name} frame ${frameIdx}, will show black`);
-            }
+                const frameIdx = Math.min(index, video.frames.length - 1);
 
-            // Pick first SEI available for HUD
-            if (!currentSei && video.frames[frameIdx]?.sei) {
-                currentSei = video.frames[frameIdx].sei;
+                // Prefer cached bitmap
+                let bmp = cacheGet(video, frameIdx);
 
-                if (video.timestamp) {
-                    const secondsElapsed = Math.floor(frameIdx / 30);
-                    const baseDate = new Date(video.timestamp);
-                    const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
-                    const year = currentDate.getFullYear();
-                    const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-                    const day = String(currentDate.getDate()).padStart(2, '0');
-                    const hours = String(currentDate.getHours()).padStart(2, '0');
-                    const minutes = String(currentDate.getMinutes()).padStart(2, '0');
-                    const seconds = String(currentDate.getSeconds()).padStart(2, '0');
-                    currentVideoTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                // Decode if cache miss (always decode during export/playback)
+                if (!bmp) {
+                    if (decode) {
+                        const frame = await decodeFrame(video, frameIdx);
+                        if (frame) {
+                            try {
+                                bmp = await createImageBitmap(frame);
+                                cachePut(video, frameIdx, bmp);
+                            } catch (err) {
+                                console.error('createImageBitmap failed:', err);
+                            } finally {
+                                try {
+                                    frame.close();
+                                } catch {
+                                }
+                            }
+                        } else {
+                            console.warn(`decodeFrame returned null for ${video.name} frame ${frameIdx}`);
+                        }
+                    } else {
+                        // If decode=false but no cache, this will show black - try to decode anyway
+                        console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
+                    }
+                }
+
+                if (bmp) {
+                    drawList.push({video, bmp});
+                } else {
+                    console.warn(`No bitmap available for ${video.name} frame ${frameIdx}, will show black`);
+                }
+
+                // Pick first SEI available for HUD
+                if (!currentSei && video.frames[frameIdx]?.sei) {
+                    currentSei = video.frames[frameIdx].sei;
+
+                    if (video.timestamp) {
+                        const secondsElapsed = Math.floor(frameIdx / 30);
+                        const baseDate = new Date(video.timestamp);
+                        const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
+                        const year = currentDate.getFullYear();
+                        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                        const day = String(currentDate.getDate()).padStart(2, '0');
+                        const hours = String(currentDate.getHours()).padStart(2, '0');
+                        const minutes = String(currentDate.getMinutes()).padStart(2, '0');
+                        const seconds = String(currentDate.getSeconds()).padStart(2, '0');
+                        currentVideoTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                    }
                 }
             }
         }
@@ -1570,8 +1624,7 @@
                 fileExt = 'webm';
             }
 
-            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
-            const bitrate = isMobile ? 5000000 : 15000000;
+            const bitrate = isMobile ? 3000000 : 15000000;
 
             const stream = canvas.captureStream(30);
             mediaRecorder = new MediaRecorder(stream, {mimeType, videoBitsPerSecond: bitrate});

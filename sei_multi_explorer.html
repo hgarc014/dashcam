@@ -1215,7 +1215,7 @@
         const baseFps = (isMobile && videos.length > 2) ? 15 : 30;
         const frameSkip = (isMobile && videos.length > 1) ? 2 : 1;
         const delay = (1000 / baseFps) * frameSkip;
-        console.log(`[PlayNext] About to schedule next frame with ${delay}ms delay, fps: ${fps}`);
+        console.log(`[PlayNext] About to schedule next frame with ${delay}ms delay, baseFps: ${baseFps}, skip: ${frameSkip}`);
         playTimer = setTimeout(() => {
             console.log(`[PlayNext] setTimeout fired, calling playNext`);
             playNext();

@@ -683,6 +683,13 @@
 
     // Mobile detection
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
+    
+    // Show mobile detection status immediately
+    console.log('Mobile Detection:', isMobile);
+    console.log('User Agent:', navigator.userAgent);
+    console.log('Window Width:', window.innerWidth);
+    exportStatus.textContent = `Mobile: ${isMobile} | UA: ${navigator.userAgent.substring(0, 50)}...`;
+    setTimeout(() => { if (exportStatus.textContent.includes('Mobile:')) exportStatus.textContent = ''; }, 5000);
 
     // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
     const MAX_CACHE_PER_VIDEO = isMobile ? 6 : 20; // Reduced cache for mobile performance
@@ -1116,10 +1123,8 @@
         if (!videos.length || playing) return;
         playing = true;
         playBtn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="5" y="4" width="4" height="16"/><rect x="15" y="4" width="4" height="16"/></svg>';
-        if (isMobile) {
-            console.log('[Mobile] Starting playback from frame', currentFrameIndex);
-            exportStatus.textContent = `Playing frame ${currentFrameIndex}...`;
-        }
+        console.log('[Play] Starting playback from frame', currentFrameIndex, 'isMobile:', isMobile);
+        exportStatus.textContent = `Playing frame ${currentFrameIndex}... (Mobile: ${isMobile})`;
         playNext();
     }
 
@@ -1134,11 +1139,11 @@
 
     async function playNext() {
         if (!playing) {
-            if (isMobile) console.log('[Mobile] playNext called but playing=false');
+            console.log('[PlayNext] Called but playing=false');
             return;
         }
         
-        if (isMobile) console.log('[Mobile] playNext frame', currentFrameIndex + 1);
+        console.log('[PlayNext] Frame', currentFrameIndex + 1, 'isMobile:', isMobile);
 
         currentFrameIndex++;
         const maxFrame = cropEnabled ? cropEnd : +slider.max;
@@ -1164,30 +1169,26 @@
 
         slider.value = currentFrameIndex;
         
-        if (isMobile) {
-            exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame}`;
-        }
+        // Always show status for debugging
+        exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (Mobile: ${isMobile})`;
         
         const frameStart = performance.now();
         try {
             await showFrame(currentFrameIndex, {decode: true});
             const frameTime = performance.now() - frameStart;
-            if (isMobile) console.log(`[Mobile] Frame ${currentFrameIndex} decoded in ${frameTime.toFixed(1)}ms`);
+            console.log(`[PlayNext] Frame ${currentFrameIndex} decoded in ${frameTime.toFixed(1)}ms`);
         } catch (err) {
-            console.error('[Mobile] Playback error at frame', currentFrameIndex, err);
-            if (isMobile) {
-                // On mobile errors, pause and alert user
-                pause();
-                exportStatus.textContent = `Error at frame ${currentFrameIndex}`;
-                alert(`Playback stopped at frame ${currentFrameIndex}: ${err.message}`);
-                return;
-            }
+            console.error('[PlayNext] Playback error at frame', currentFrameIndex, err);
+            pause();
+            exportStatus.textContent = `Error at frame ${currentFrameIndex}: ${err.message}`;
+            alert(`Playback stopped at frame ${currentFrameIndex}: ${err.message}`);
+            return;
         }
         
         // Mobile: slower playback for stability with multiple videos
         const fps = (isMobile && videos.length > 2) ? 15 : 30;
         const delay = 1000 / fps;
-        if (isMobile) console.log(`[Mobile] Scheduling next frame in ${delay}ms`);
+        console.log(`[PlayNext] Scheduling next frame in ${delay}ms, fps: ${fps}`);
         playTimer = setTimeout(playNext, delay);
     }
 

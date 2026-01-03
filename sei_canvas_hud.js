@@ -47,6 +47,16 @@
         return fallback;
     }
 
+    function createCanvas(width, height) {
+        if (typeof OffscreenCanvas !== "undefined") {
+            return new OffscreenCanvas(width, height);
+        }
+        const c = document.createElement("canvas");
+        c.width = width;
+        c.height = height;
+        return c;
+    }
+
     function normalizeTelemetry(raw, opts) {
         const speedMps = pickNumber(raw, ["vehicleSpeedMps"], 0);
         const speedMph = speedMps * 2.23694;
@@ -79,6 +89,9 @@
             this.opts = {...DEFAULTS, ...opts};
             this.blinkState = false;
             this.lastBlink = 0;
+
+            this.staticLayerCanvas = null;
+            this.staticLayerCtx = null;
         }
 
         render(ctx, telemetry, x, y, scale = 1) {
@@ -90,7 +103,9 @@
             ctx.translate(x, y);
             ctx.scale(scale, scale);
 
-            this.drawCard(ctx, t);
+            const base = this.getStaticLayer();
+            if (base) ctx.drawImage(base, 0, 0);
+            this.drawDynamic(ctx, t);
 
             ctx.restore();
         }
@@ -199,6 +214,106 @@
             this.drawBrakeCircle(ctx, 90, bottomIconY, t.brake);
 
             // Throttle on right
+            this.drawThrottleCircle(ctx, cardWidth - 90, bottomIconY, t.throttlePct);
+        }
+
+        getStaticLayer() {
+            if (this.staticLayerCanvas) return this.staticLayerCanvas;
+
+            const cardWidth = 420;
+            const cardHeight = 240;
+
+            const c = createCanvas(cardWidth, cardHeight);
+            const cctx = c.getContext("2d");
+            if (!cctx) return null;
+
+            this.staticLayerCanvas = c;
+            this.staticLayerCtx = cctx;
+
+            cctx.clearRect(0, 0, cardWidth, cardHeight);
+
+            cctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+            cctx.shadowBlur = 20;
+            cctx.shadowOffsetX = 0;
+            cctx.shadowOffsetY = 4;
+
+            cctx.fillStyle = "rgba(15, 15, 18, 0.85)";
+            this.roundRect(cctx, 0, 0, cardWidth, cardHeight, 20);
+            cctx.fill();
+
+            cctx.shadowColor = "transparent";
+            cctx.shadowBlur = 0;
+            cctx.shadowOffsetX = 0;
+            cctx.shadowOffsetY = 0;
+
+            cctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+            cctx.lineWidth = 1.5;
+            this.roundRect(cctx, 0, 0, cardWidth, cardHeight, 20);
+            cctx.stroke();
+
+            const bottomY = 150;
+            const bottomHeight = 70;
+            const bottomPadding = 25;
+
+            cctx.fillStyle = "rgba(8, 8, 12, 0.6)";
+            this.roundRect(cctx, bottomPadding, bottomY, cardWidth - bottomPadding * 2, bottomHeight, 16);
+            cctx.fill();
+
+            cctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+            cctx.lineWidth = 1;
+            this.roundRect(cctx, bottomPadding, bottomY, cardWidth - bottomPadding * 2, bottomHeight, 16);
+            cctx.stroke();
+
+            return this.staticLayerCanvas;
+        }
+
+        drawDynamic(ctx, t) {
+            const now = Date.now();
+            if (now - this.lastBlink > 550) {
+                this.blinkState = !this.blinkState;
+                this.lastBlink = now;
+            }
+
+            const cardWidth = 420;
+            const cardHeight = 240;
+            const cx = cardWidth / 2;
+
+            if (t.timestamp) {
+                ctx.font = "500 16px -apple-system, system-ui, sans-serif";
+                ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "top";
+                ctx.fillText(t.timestamp, cx, 25);
+            }
+
+            const topRowY = 90;
+
+            this.drawGearCircle(ctx, 55, topRowY, t.gear);
+            this.drawSignalPill(ctx, 130, topRowY, "◀", t.left && this.blinkState);
+            this.drawSpeed(ctx, cx, topRowY, t.speed, this.opts.useMph ? "mph" : "km/h");
+            this.drawSignalPill(ctx, cardWidth - 130, topRowY, "▶", t.right && this.blinkState);
+            this.drawWheelCircle(ctx, cardWidth - 55, topRowY, t.steerDeg);
+
+            const bottomY = 150;
+            const bottomHeight = 70;
+            const labelY = bottomY + 28;
+
+            if (t.autopilotState && t.autopilotState !== "OFF") {
+                ctx.font = "600 30px -apple-system, system-ui, sans-serif";
+                ctx.fillStyle = "rgb(85, 160, 255)";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("Self-Driving", cx, labelY);
+            } else {
+                ctx.font = "600 30px -apple-system, system-ui, sans-serif";
+                ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("Human", cx, labelY);
+            }
+
+            const bottomIconY = bottomY + bottomHeight / 2 + 8;
+            this.drawBrakeCircle(ctx, 90, bottomIconY, t.brake);
             this.drawThrottleCircle(ctx, cardWidth - 90, bottomIconY, t.throttlePct);
         }
 

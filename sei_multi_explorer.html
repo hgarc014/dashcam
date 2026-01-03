@@ -778,6 +778,7 @@
     let hudRenderer = new SeiCanvasHud();
     const hudTelemetryCache = new WeakMap();
     let mediaRecorder = null;
+    let exportEncoder = null;
     let recordedChunks = [];
     let exportCancelled = false;
 
@@ -2113,7 +2114,7 @@
 
     // ---------- Export (MediaRecorder) ----------
     async function startExport() {
-        if (!videos.length || mediaRecorder) return;
+        if (!videos.length || mediaRecorder || exportEncoder) return;
 
         try {
             exportCancelled = false;
@@ -2135,6 +2136,8 @@
 
             const format = exportFormat.value;
             let mimeType, fileExt;
+
+            const preferOfflineWebCodecs = (format === 'webm-vp9' || format === 'webm-vp8') && typeof VideoEncoder !== 'undefined';
 
             switch (format) {
                 case 'webm-vp9':
@@ -2158,6 +2161,51 @@
                 alert(`Format ${format} is not supported by your browser. Falling back to VP9.`);
                 mimeType = 'video/webm;codecs=vp9';
                 fileExt = 'webm';
+            }
+
+            if (preferOfflineWebCodecs) {
+                pause();
+
+                const startFrame = cropEnabled ? cropStart : 0;
+                const endFrame = cropEnabled ? cropEnd : +slider.max;
+                const totalFrames = endFrame - startFrame + 1;
+
+                exportStatus.textContent = `Exporting ${totalFrames} frames...`;
+                currentFrameIndex = startFrame;
+                slider.value = startFrame;
+
+                const blob = await exportOfflineWebM(startFrame, endFrame, totalFrames, {format});
+
+                if (!exportCancelled && blob) {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
+                    a.download = `dashcam_export${cropSuffix}_${Date.now()}.webm`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }
+
+                exportStatus.textContent = exportCancelled ? 'Export cancelled' : 'Export complete!';
+
+                exportBtn.disabled = false;
+                exportBtn.style.display = 'inline-block';
+                cancelExportBtn.disabled = true;
+                cancelExportBtn.style.display = 'none';
+                slider.disabled = false;
+                playBtn.disabled = false;
+                applyLayoutBtn.disabled = false;
+                resetLayoutBtn.disabled = false;
+                cropStartInput.disabled = false;
+                cropEndInput.disabled = false;
+                canvasSizeSelect.disabled = false;
+
+                mediaRecorder = null;
+                setTimeout(() => {
+                    exportStatus.textContent = '';
+                }, 3000);
+
+                return;
             }
 
             const bitrate = isMobile ? 3000000 : 15000000;
@@ -2241,11 +2289,12 @@
             canvasSizeSelect.disabled = false;
             
             mediaRecorder = null;
+            exportEncoder = null;
         }
     }
 
     function cancelExport() {
-        if (!mediaRecorder) return;
+        if (!mediaRecorder && !exportEncoder) return;
         
         exportCancelled = true;
         exportStatus.textContent = 'Cancelling export...';
@@ -2257,6 +2306,14 @@
             }
         } catch (err) {
             console.error('Error stopping mediaRecorder:', err);
+        }
+
+        try {
+            if (exportEncoder) {
+                exportEncoder.close();
+                exportEncoder = null;
+            }
+        } catch {
         }
     }
 
@@ -2310,6 +2367,291 @@
                 v.lastDecodedFrame = undefined;
             }
         }
+    }
+
+    async function exportOfflineWebM(start, end, totalFrames, {format}) {
+        const cfg = getTimelineConfig();
+        const width = canvas.width;
+        const height = canvas.height;
+
+        const codec = format === 'webm-vp8' ? 'vp8' : 'vp09.00.10.08';
+        const codecId = format === 'webm-vp8' ? 'V_VP8' : 'V_VP9';
+
+        const support = await VideoEncoder.isConfigSupported({
+            codec,
+            width,
+            height,
+            bitrate: isMobile ? 3000000 : 15000000,
+            framerate: 30
+        });
+        if (!support?.supported) {
+            throw new Error(`VideoEncoder does not support ${codec} at ${width}x${height}`);
+        }
+
+        const chunks = [];
+        let lastProgressUpdate = 0;
+        const exportStartTime = performance.now();
+
+        let encoderError = null;
+        exportEncoder = new VideoEncoder({
+            output: (chunk) => {
+                const data = new Uint8Array(chunk.byteLength);
+                chunk.copyTo(data);
+                chunks.push({
+                    data,
+                    timestamp: chunk.timestamp,
+                    duration: chunk.duration,
+                    type: chunk.type
+                });
+            },
+            error: (err) => {
+                encoderError = err;
+            }
+        });
+
+        exportEncoder.configure({
+            codec,
+            width,
+            height,
+            bitrate: isMobile ? 3000000 : 15000000,
+            framerate: 30
+        });
+
+        for (let i = start; i <= end; i++) {
+            if (exportCancelled || !exportEncoder) break;
+
+            currentFrameIndex = i;
+            slider.value = i;
+
+            await showFrame(i, {decode: true});
+
+            const tsUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
+            const nextUs = cfg ? getFrameTimestamp(Math.min(i + 1, end), cfg) : ((i - start) + 1) * 33333;
+            const durUs = Math.max(1, nextUs - tsUs);
+
+            const vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
+
+            const makeKeyFrame = (i === start) || ((i - start) % 60 === 0);
+            exportEncoder.encode(vf, {keyFrame: makeKeyFrame});
+            vf.close();
+
+            if (encoderError) throw encoderError;
+
+            if (exportEncoder.encodeQueueSize > 30) {
+                await exportEncoder.flush();
+                if (encoderError) throw encoderError;
+            }
+
+            const now = performance.now();
+            if (now - lastProgressUpdate > 150) {
+                const progress = Math.round(((i - start + 1) / totalFrames) * 100);
+                const totalElapsed = (now - exportStartTime) / 1000;
+                const framesProcessed = i - start + 1;
+                const realFPS = framesProcessed / Math.max(0.001, totalElapsed);
+                exportStatus.textContent = `Exporting: ${progress}% (${framesProcessed}/${totalFrames}) ${realFPS.toFixed(1)} fps`;
+                lastProgressUpdate = now;
+            }
+        }
+
+        if (exportEncoder) {
+            try {
+                await exportEncoder.flush();
+            } catch {
+            }
+            try {
+                exportEncoder.close();
+            } catch {
+            }
+            exportEncoder = null;
+        }
+
+        if (encoderError) throw encoderError;
+
+        if (exportCancelled) {
+            return null;
+        }
+
+        const webmBytes = muxWebM(chunks, {width, height, codecId});
+
+        for (const v of videos) {
+            if (v.decoder) {
+                try {
+                    await v.decoder.flush().catch(() => {
+                    });
+                } catch {
+                }
+                try {
+                    v.decoder.close();
+                } catch {
+                }
+                v.decoder = null;
+                v.lastDecodedFrame = undefined;
+            }
+        }
+
+        return new Blob([webmBytes], {type: 'video/webm'});
+    }
+
+    function muxWebM(chunks, {width, height, codecId}) {
+        const timecodeScale = 1000000;
+
+        function u8(...xs) {
+            return new Uint8Array(xs);
+        }
+
+        function concat(arrs) {
+            let total = 0;
+            for (const a of arrs) total += a.byteLength;
+            const out = new Uint8Array(total);
+            let off = 0;
+            for (const a of arrs) {
+                out.set(a, off);
+                off += a.byteLength;
+            }
+            return out;
+        }
+
+        function toBigInt(n) {
+            if (typeof n === 'bigint') return n;
+            if (!Number.isFinite(n)) return 0n;
+            return BigInt(Math.floor(n));
+        }
+
+        function encodeUnsigned(n) {
+            let x = toBigInt(n);
+            if (x === 0n) return u8(0);
+            const bytes = [];
+            while (x > 0n) {
+                bytes.push(Number(x & 0xFFn));
+                x >>= 8n;
+            }
+            bytes.reverse();
+            return u8(...bytes);
+        }
+
+        function encodeSigned16(n) {
+            const v = (n & 0xFFFF);
+            return u8((v >> 8) & 0xFF, v & 0xFF);
+        }
+
+        function encodeFloat64(n) {
+            const b = new ArrayBuffer(8);
+            new DataView(b).setFloat64(0, n);
+            return new Uint8Array(b);
+        }
+
+        function encodeString(s) {
+            return new TextEncoder().encode(s);
+        }
+
+        function encodeVint(value) {
+            const v = toBigInt(value);
+            for (let len = 1; len <= 8; len++) {
+                const max = (1n << (7n * BigInt(len))) - 1n;
+                if (v <= max) {
+                    const out = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) {
+                        out[len - 1 - i] = Number((v >> (8n * BigInt(i))) & 0xFFn);
+                    }
+                    out[0] |= 1 << (8 - len);
+                    return out;
+                }
+            }
+            throw new Error('vint too large');
+        }
+
+        function el(idBytes, dataBytes) {
+            return concat([idBytes, encodeVint(dataBytes.byteLength), dataBytes]);
+        }
+
+        const EBML_ID = u8(0x1A, 0x45, 0xDF, 0xA3);
+        const SEGMENT_ID = u8(0x18, 0x53, 0x80, 0x67);
+        const INFO_ID = u8(0x15, 0x49, 0xA9, 0x66);
+        const TRACKS_ID = u8(0x16, 0x54, 0xAE, 0x6B);
+        const CLUSTER_ID = u8(0x1F, 0x43, 0xB6, 0x75);
+
+        const EBMLVersion = el(u8(0x42, 0x86), u8(0x01));
+        const EBMLReadVersion = el(u8(0x42, 0xF7), u8(0x01));
+        const EBMLMaxIDLength = el(u8(0x42, 0xF2), u8(0x04));
+        const EBMLMaxSizeLength = el(u8(0x42, 0xF3), u8(0x08));
+        const DocType = el(u8(0x42, 0x82), encodeString('webm'));
+        const DocTypeVersion = el(u8(0x42, 0x87), u8(0x04));
+        const DocTypeReadVersion = el(u8(0x42, 0x85), u8(0x02));
+        const ebmlHeader = el(EBML_ID, concat([
+            EBMLVersion,
+            EBMLReadVersion,
+            EBMLMaxIDLength,
+            EBMLMaxSizeLength,
+            DocType,
+            DocTypeVersion,
+            DocTypeReadVersion
+        ]));
+
+        const tScale = el(u8(0x2A, 0xD7, 0xB1), encodeUnsigned(timecodeScale));
+
+        let durationSec = 0;
+        if (chunks.length) {
+            const last = chunks[chunks.length - 1];
+            const endUs = (last.timestamp || 0) + (last.duration || 0);
+            durationSec = endUs / 1_000_000;
+        }
+        const duration = el(u8(0x44, 0x89), encodeFloat64(durationSec));
+        const muxingApp = el(u8(0x4D, 0x80), encodeString('dashcam'));
+        const writingApp = el(u8(0x57, 0x41), encodeString('dashcam'));
+        const info = el(INFO_ID, concat([tScale, duration, muxingApp, writingApp]));
+
+        const trackEntry = el(u8(0xAE), concat([
+            el(u8(0xD7), u8(0x01)),
+            el(u8(0x73, 0xC5), encodeUnsigned(1)),
+            el(u8(0x83), u8(0x01)),
+            el(u8(0x86), encodeString(codecId)),
+            el(u8(0xE0), concat([
+                el(u8(0xB0), encodeUnsigned(width)),
+                el(u8(0xBA), encodeUnsigned(height))
+            ]))
+        ]));
+        const tracks = el(TRACKS_ID, trackEntry);
+
+        function simpleBlock(trackNumber, timecodeRel, keyframe, frameData) {
+            const tn = encodeVint(trackNumber);
+            const flags = keyframe ? 0x80 : 0x00;
+            return concat([tn, encodeSigned16(timecodeRel), u8(flags), frameData]);
+        }
+
+        function encodeCluster(clusterTimecodeMs, blocks) {
+            const tc = el(u8(0xE7), encodeUnsigned(clusterTimecodeMs));
+            const body = concat([tc, ...blocks.map(b => el(u8(0xA3), b))]);
+            return el(CLUSTER_ID, body);
+        }
+
+        const clusters = [];
+        let clusterStartMs = null;
+        let currentBlocks = [];
+
+        for (const c of chunks) {
+            const tsMs = Math.floor((c.timestamp || 0) / 1000);
+            if (clusterStartMs == null) {
+                clusterStartMs = tsMs;
+            }
+            const rel = tsMs - clusterStartMs;
+            const isKey = c.type === 'key';
+
+            if (rel > 5000 || (isKey && currentBlocks.length)) {
+                clusters.push(encodeCluster(clusterStartMs, currentBlocks));
+                clusterStartMs = tsMs;
+                currentBlocks = [];
+            }
+
+            currentBlocks.push(simpleBlock(1, rel, isKey, c.data));
+        }
+
+        if (clusterStartMs != null && currentBlocks.length) {
+            clusters.push(encodeCluster(clusterStartMs, currentBlocks));
+        }
+
+        const segmentBody = concat([info, tracks, ...clusters]);
+        const segment = concat([SEGMENT_ID, encodeVint(segmentBody.byteLength), segmentBody]);
+        return concat([ebmlHeader, segment]);
     }
 
     // ---------- Interaction (drag/resize/rotate) ----------

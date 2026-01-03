@@ -624,6 +624,7 @@
             <div class="button-group">
                 <button class="btn btn-secondary" id="resetLayoutBtn" disabled>Reset Layout</button>
                 <button class="btn" id="exportBtn" disabled>Export Video</button>
+                <button class="btn btn-secondary" id="cancelExportBtn" disabled style="display:none;">Cancel Export</button>
             </div>
             <div class="export-status" id="exportStatus"></div>
         </aside>
@@ -652,6 +653,7 @@
     let hudRenderer = new SeiCanvasHud();
     let mediaRecorder = null;
     let recordedChunks = [];
+    let exportCancelled = false;
 
     let cropStart = 0, cropEnd = 0;
     const cropEnabled = true;
@@ -667,6 +669,7 @@
     const dropOverlay = $('dropOverlay'), fileInput = $('fileInput');
     const canvas = $('canvas'), ctx = canvas.getContext('2d', {alpha: false, desynchronized: true});
     const slider = $('slider'), playBtn = $('playBtn'), exportBtn = $('exportBtn');
+    const cancelExportBtn = $('cancelExportBtn');
     const videoList = $('videoList'), canvasSizeSelect = $('canvasSizeSelect');
     const applyLayoutBtn = $('applyLayoutBtn'), resetLayoutBtn = $('resetLayoutBtn');
     const timeDisplay = $('timeDisplay'), exportStatus = $('exportStatus');
@@ -789,6 +792,7 @@
     applyLayoutBtn.onclick = () => applyLayout();
     resetLayoutBtn.onclick = () => resetLayout();
     exportBtn.onclick = () => startExport();
+    cancelExportBtn.onclick = () => cancelExport();
 
     // ---------- Crop inputs ----------
     cropStartInput.oninput = () => {
@@ -1521,7 +1525,21 @@
         if (!videos.length || mediaRecorder) return;
 
         try {
+            exportCancelled = false;
             exportBtn.disabled = true;
+            exportBtn.style.display = 'none';
+            cancelExportBtn.disabled = false;
+            cancelExportBtn.style.display = 'inline-block';
+            
+            // Disable all controls during export
+            slider.disabled = true;
+            playBtn.disabled = true;
+            applyLayoutBtn.disabled = true;
+            resetLayoutBtn.disabled = true;
+            cropStartInput.disabled = true;
+            cropEndInput.disabled = true;
+            canvasSizeSelect.disabled = true;
+            
             exportStatus.textContent = 'Preparing export...';
 
             const format = exportFormat.value;
@@ -1563,17 +1581,33 @@
             };
 
             mediaRecorder.onstop = () => {
-                const blob = new Blob(recordedChunks, {type: mimeType});
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
-                a.download = `dashcam_export${cropSuffix}_${Date.now()}.${fileExt}`;
-                a.click();
-                URL.revokeObjectURL(url);
+                // Only download if not cancelled
+                if (!exportCancelled && recordedChunks.length > 0) {
+                    const blob = new Blob(recordedChunks, {type: mimeType});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
+                    a.download = `dashcam_export${cropSuffix}_${Date.now()}.${fileExt}`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }
 
-                exportStatus.textContent = 'Export complete!';
+                exportStatus.textContent = exportCancelled ? 'Export cancelled' : 'Export complete!';
+                
+                // Re-enable all controls
                 exportBtn.disabled = false;
+                exportBtn.style.display = 'inline-block';
+                cancelExportBtn.disabled = true;
+                cancelExportBtn.style.display = 'none';
+                slider.disabled = false;
+                playBtn.disabled = false;
+                applyLayoutBtn.disabled = false;
+                resetLayoutBtn.disabled = false;
+                cropStartInput.disabled = false;
+                cropEndInput.disabled = false;
+                canvasSizeSelect.disabled = false;
+                
                 mediaRecorder = null;
                 setTimeout(() => {
                     exportStatus.textContent = '';
@@ -1594,13 +1628,45 @@
 
             await recordFrames(startFrame, endFrame, totalFrames);
 
-            mediaRecorder.stop();
+            // Only stop if not already stopped by cancel
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
 
         } catch (err) {
             alert(`Export failed: ${err.message}`);
             exportStatus.textContent = 'Export failed';
+            
+            // Re-enable all controls on error
             exportBtn.disabled = false;
+            exportBtn.style.display = 'inline-block';
+            cancelExportBtn.disabled = true;
+            cancelExportBtn.style.display = 'none';
+            slider.disabled = false;
+            playBtn.disabled = false;
+            applyLayoutBtn.disabled = false;
+            resetLayoutBtn.disabled = false;
+            cropStartInput.disabled = false;
+            cropEndInput.disabled = false;
+            canvasSizeSelect.disabled = false;
+            
             mediaRecorder = null;
+        }
+    }
+
+    function cancelExport() {
+        if (!mediaRecorder) return;
+        
+        exportCancelled = true;
+        exportStatus.textContent = 'Cancelling export...';
+        
+        // Stop the media recorder
+        try {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+        } catch (err) {
+            console.error('Error stopping mediaRecorder:', err);
         }
     }
 
@@ -1612,7 +1678,8 @@
         const frameDuration = 1000 / 30;
 
         for (let i = start; i <= end; i++) {
-            if (!mediaRecorder || mediaRecorder.state !== 'recording') break;
+            // Check if export was cancelled
+            if (exportCancelled || !mediaRecorder || mediaRecorder.state !== 'recording') break;
 
             const frameStart = performance.now();
 

@@ -809,7 +809,8 @@
     let draggingCropMarker = null;
 
     // Mobile detection
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
+    const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    const isMobile = isMobileDevice || window.innerWidth <= 768;
     
     // Debug Panel Setup
     const debugPanel = $('debugPanel');
@@ -2140,7 +2141,9 @@
             const format = exportFormat.value;
             let mimeType, fileExt;
 
-            const preferOfflineWebCodecs = (format === 'webm-vp9' || format === 'webm-vp8') && typeof VideoEncoder !== 'undefined';
+            const canUseWebCodecs = (format === 'webm-vp9' || format === 'webm-vp8') && typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined';
+            const secureContextOk = window.isSecureContext === true;
+            const preferOfflineWebCodecs = canUseWebCodecs && secureContextOk;
 
             switch (format) {
                 case 'webm-vp9':
@@ -2166,6 +2169,10 @@
                 fileExt = 'webm';
             }
 
+            if (canUseWebCodecs && !secureContextOk) {
+                throw new Error('Offline WebCodecs export requires a secure context (https or http://localhost).');
+            }
+
             if (preferOfflineWebCodecs) {
                 pause();
 
@@ -2177,38 +2184,125 @@
                 currentFrameIndex = startFrame;
                 slider.value = startFrame;
 
-                const blob = await exportOfflineWebM(startFrame, endFrame, totalFrames, {format});
+                try {
+                    const blob = await exportOfflineWebM(startFrame, endFrame, totalFrames, {format});
 
-                if (!exportCancelled && blob) {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
-                    a.download = `dashcam_export${cropSuffix}_${Date.now()}.webm`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    if (!exportCancelled && blob) {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
+                        a.download = `dashcam_export${cropSuffix}_${Date.now()}.webm`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    }
+
+                    exportStatus.textContent = exportCancelled ? 'Export cancelled' : 'Export complete!';
+
+                    exportBtn.disabled = false;
+                    exportBtn.style.display = 'inline-block';
+                    cancelExportBtn.disabled = true;
+                    cancelExportBtn.style.display = 'none';
+                    slider.disabled = false;
+                    playBtn.disabled = false;
+                    applyLayoutBtn.disabled = false;
+                    resetLayoutBtn.disabled = false;
+                    cropStartInput.disabled = false;
+                    cropEndInput.disabled = false;
+                    canvasSizeSelect.disabled = false;
+
+                    mediaRecorder = null;
+                    setTimeout(() => {
+                        exportStatus.textContent = '';
+                    }, 3000);
+
+                    return;
+                } catch (err) {
+                    const msg = String(err?.message || err);
+                    const codecUnsupported = msg.includes('does not support') || msg.includes('No supported codec') || msg.includes('Encoder creation error');
+
+                    if (!exportCancelled && typeof MediaStreamTrackGenerator !== 'undefined' && typeof VideoFrame !== 'undefined') {
+                        try {
+                            exportStatus.textContent = 'Retrying export using TrackGenerator...';
+                            const tgBlob = await exportOfflineTrackGeneratorWebM(startFrame, endFrame, totalFrames, {mimeType});
+                            if (!exportCancelled && tgBlob) {
+                                const url = URL.createObjectURL(tgBlob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
+                                a.download = `dashcam_export${cropSuffix}_${Date.now()}.webm`;
+                                a.click();
+                                URL.revokeObjectURL(url);
+                            }
+
+                            exportStatus.textContent = exportCancelled ? 'Export cancelled' : 'Export complete!';
+
+                            exportBtn.disabled = false;
+                            exportBtn.style.display = 'inline-block';
+                            cancelExportBtn.disabled = true;
+                            cancelExportBtn.style.display = 'none';
+                            slider.disabled = false;
+                            playBtn.disabled = false;
+                            applyLayoutBtn.disabled = false;
+                            resetLayoutBtn.disabled = false;
+                            cropStartInput.disabled = false;
+                            cropEndInput.disabled = false;
+                            canvasSizeSelect.disabled = false;
+
+                            mediaRecorder = null;
+                            setTimeout(() => {
+                                exportStatus.textContent = '';
+                            }, 3000);
+
+                            return;
+                        } catch (tgErr) {
+                            const tgMsg = String(tgErr?.message || tgErr);
+                            exportStatus.textContent = `TrackGenerator export failed: ${tgMsg}`;
+                        }
+                    }
+
+                    if (codecUnsupported && typeof JSZip !== 'undefined') {
+                        const ok = confirm('Your browser cannot encode VP9/VP8 at this canvas size. Export a PNG frame ZIP instead?');
+                        if (ok) {
+                            exportStatus.textContent = 'Exporting PNG frames (ZIP)...';
+                            const zipBlob = await exportFramesZip(startFrame, endFrame, totalFrames);
+                            if (!exportCancelled && zipBlob) {
+                                const url = URL.createObjectURL(zipBlob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                const cropSuffix = cropEnabled ? `_${cropStart}-${cropEnd}` : '';
+                                a.download = `dashcam_export${cropSuffix}_${Date.now()}_frames.zip`;
+                                a.click();
+                                URL.revokeObjectURL(url);
+                            }
+
+                            exportStatus.textContent = exportCancelled ? 'Export cancelled' : 'Export complete!';
+
+                            exportBtn.disabled = false;
+                            exportBtn.style.display = 'inline-block';
+                            cancelExportBtn.disabled = true;
+                            cancelExportBtn.style.display = 'none';
+                            slider.disabled = false;
+                            playBtn.disabled = false;
+                            applyLayoutBtn.disabled = false;
+                            resetLayoutBtn.disabled = false;
+                            cropStartInput.disabled = false;
+                            cropEndInput.disabled = false;
+                            canvasSizeSelect.disabled = false;
+
+                            mediaRecorder = null;
+                            setTimeout(() => {
+                                exportStatus.textContent = '';
+                            }, 3000);
+
+                            return;
+                        }
+                    }
+
+                    // Do NOT silently fall back to MediaRecorder here.
+                    // captureStream/MediaRecorder is realtime and can produce slow-motion/duplicate frames under load.
+                    throw err;
                 }
-
-                exportStatus.textContent = exportCancelled ? 'Export cancelled' : 'Export complete!';
-
-                exportBtn.disabled = false;
-                exportBtn.style.display = 'inline-block';
-                cancelExportBtn.disabled = true;
-                cancelExportBtn.style.display = 'none';
-                slider.disabled = false;
-                playBtn.disabled = false;
-                applyLayoutBtn.disabled = false;
-                resetLayoutBtn.disabled = false;
-                cropStartInput.disabled = false;
-                cropEndInput.disabled = false;
-                canvasSizeSelect.disabled = false;
-
-                mediaRecorder = null;
-                setTimeout(() => {
-                    exportStatus.textContent = '';
-                }, 3000);
-
-                return;
             }
 
             const bitrate = isMobile ? 3000000 : 15000000;
@@ -2354,7 +2448,10 @@
             }
         }
 
-        // cleanup decoders post-export (keeps memory sane)
+        await cleanupDecodersAfterExport();
+    }
+
+    async function cleanupDecodersAfterExport() {
         for (const v of videos) {
             if (v.decoder) {
                 try {
@@ -2376,123 +2473,447 @@
         const cfg = getTimelineConfig();
         const width = canvas.width;
         const height = canvas.height;
+        const isExportMobile = isMobileDevice;
 
-        const codec = format === 'webm-vp8' ? 'vp8' : 'vp09.00.10.08';
-        const codecId = format === 'webm-vp8' ? 'V_VP8' : 'V_VP9';
-
-        const support = await VideoEncoder.isConfigSupported({
-            codec,
-            width,
-            height,
-            bitrate: isMobile ? 3000000 : 15000000,
-            framerate: 30
-        });
-        if (!support?.supported) {
-            throw new Error(`VideoEncoder does not support ${codec} at ${width}x${height}`);
+        if (window.isSecureContext !== true) {
+            throw new Error('Offline WebCodecs export requires a secure context (https or http://localhost).');
         }
 
+        async function yieldToEventLoop() {
+            await new Promise(r => setTimeout(r, 0));
+        }
+
+        async function runWithCodec(codec, codecId) {
+            const targetBitrate = isExportMobile ? 1500000 : 15000000;
+
+            let support;
+            try {
+                support = await VideoEncoder.isConfigSupported({
+                    codec,
+                    width,
+                    height,
+                    bitrate: targetBitrate,
+                    framerate: 30,
+                    hardwareAcceleration: 'prefer-hardware'
+                });
+            } catch {
+                support = await VideoEncoder.isConfigSupported({
+                    codec,
+                    width,
+                    height,
+                    bitrate: targetBitrate,
+                    framerate: 30
+                });
+            }
+            if (!support?.supported && isExportMobile) {
+                throw new Error(`VideoEncoder does not support ${codec} at ${width}x${height}`);
+            }
+
+            const chunks = [];
+            let lastProgressUpdate = 0;
+            const exportStartTime = performance.now();
+
+            let encoderError = null;
+            let lastOutputAt = performance.now();
+
+            function ensureEncoderActive() {
+                if (exportCancelled) return false;
+                if (!exportEncoder) return false;
+                if (encoderError) throw encoderError;
+                if (exportEncoder.state === 'closed') {
+                    throw new Error('VideoEncoder closed unexpectedly');
+                }
+                return true;
+            }
+            exportEncoder = new VideoEncoder({
+                output: (chunk) => {
+                    const data = new Uint8Array(chunk.byteLength);
+                    chunk.copyTo(data);
+                    chunks.push({
+                        data,
+                        timestamp: chunk.timestamp,
+                        duration: chunk.duration,
+                        type: chunk.type
+                    });
+                    lastOutputAt = performance.now();
+                },
+                error: (err) => {
+                    encoderError = err;
+                }
+            });
+
+            try {
+                let configured = false;
+                try {
+                    exportEncoder.configure({
+                        codec,
+                        width,
+                        height,
+                        bitrate: targetBitrate,
+                        framerate: 30,
+                        hardwareAcceleration: 'prefer-hardware'
+                    });
+                    configured = true;
+                } catch {
+                }
+
+                if (!configured) {
+                    try {
+                        exportEncoder.configure({
+                            codec,
+                            width,
+                            height,
+                            bitrate: targetBitrate,
+                            framerate: 30
+                        });
+                        configured = true;
+                    } catch {
+                    }
+                }
+
+                if (!configured && !isExportMobile) {
+                    try {
+                        exportEncoder.configure({
+                            codec,
+                            width,
+                            height,
+                            bitrate: Math.max(3000000, Math.floor(targetBitrate / 2)),
+                            framerate: 30
+                        });
+                        configured = true;
+                    } catch {
+                    }
+                }
+
+                if (!configured && !isExportMobile) {
+                    exportEncoder.configure({
+                        codec,
+                        width,
+                        height,
+                        framerate: 30
+                    });
+                    configured = true;
+                }
+
+                const flushThreshold = isExportMobile ? 0 : 30;
+                const baseUs = cfg ? getFrameTimestamp(start, cfg) : 0;
+                let prevAbsUs = null;
+
+                for (let i = start; i <= end; i++) {
+                    if (!ensureEncoderActive()) break;
+
+                    currentFrameIndex = i;
+                    slider.value = i;
+
+                    await showFrame(i, {decode: true});
+
+                    if (!ensureEncoderActive()) break;
+
+                    const absUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
+                    const tsUs = Math.max(0, absUs - baseUs);
+
+                    let durUs;
+                    if (i < end) {
+                        const nextAbsUs = cfg ? getFrameTimestamp(i + 1, cfg) : ((i - start) + 1) * 33333;
+                        durUs = Math.max(1, nextAbsUs - absUs);
+                    } else if (prevAbsUs != null) {
+                        durUs = Math.max(1, absUs - prevAbsUs);
+                    } else {
+                        durUs = 33333;
+                    }
+                    prevAbsUs = absUs;
+
+                    let vf;
+                    try {
+                        vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
+                    } catch {
+                        const bmp = await createImageBitmap(canvas);
+                        vf = new VideoFrame(bmp, {timestamp: tsUs, duration: durUs});
+                        try { bmp.close(); } catch {}
+                    }
+
+                    const makeKeyFrame = (i === start) || ((i - start) % 60 === 0);
+                    try {
+                        if (!ensureEncoderActive()) {
+                            vf.close();
+                            break;
+                        }
+                        exportEncoder.encode(vf, {keyFrame: makeKeyFrame});
+                    } catch (err) {
+                        try { vf.close(); } catch {}
+                        const msg = String(err?.message || err);
+                        if (msg.includes('closed codec') || msg.includes('closed')) {
+                            throw new Error(`VideoEncoder closed during export (${codec})`);
+                        }
+                        throw err;
+                    }
+                    vf.close();
+
+                    await yieldToEventLoop();
+
+                    if (encoderError) throw encoderError;
+
+                    if (exportEncoder.encodeQueueSize > flushThreshold) {
+                        try {
+                            await exportEncoder.flush();
+                        } catch (err) {
+                            const msg = String(err?.message || err);
+                            if (msg.includes('closed codec') || msg.includes('closed')) {
+                                throw new Error(`VideoEncoder closed during export (${codec})`);
+                            }
+                            throw err;
+                        }
+                        await yieldToEventLoop();
+                        if (encoderError) throw encoderError;
+                    }
+
+                    if (isExportMobile && (performance.now() - lastOutputAt) > 4000 && (i - start) >= 5) {
+                        throw new Error('Encoder stalled');
+                    }
+
+                    const now = performance.now();
+                    if (now - lastProgressUpdate > (isExportMobile ? 800 : 150)) {
+                        const progress = Math.round(((i - start + 1) / totalFrames) * 100);
+                        const totalElapsed = (now - exportStartTime) / 1000;
+                        const framesProcessed = i - start + 1;
+                        const realFPS = framesProcessed / Math.max(0.001, totalElapsed);
+                        exportStatus.textContent = `Exporting: ${progress}% (${framesProcessed}/${totalFrames}) ${realFPS.toFixed(1)} fps`;
+                        lastProgressUpdate = now;
+                    }
+                }
+
+                if (exportEncoder) {
+                    try {
+                        await exportEncoder.flush();
+                    } catch {
+                    }
+                }
+
+                if (encoderError) throw encoderError;
+
+                if (exportCancelled) {
+                    return null;
+                }
+
+                const webmBytes = muxWebM(chunks, {width, height, codecId});
+                return new Blob([webmBytes], {type: 'video/webm'});
+            } finally {
+                if (exportEncoder) {
+                    try { exportEncoder.close(); } catch {}
+                    exportEncoder = null;
+                }
+                await cleanupDecodersAfterExport();
+            }
+        }
+
+        async function runWithCodecList(codecs, codecId) {
+            let lastErr = null;
+            for (const c of codecs) {
+                try {
+                    return await runWithCodec(c, codecId);
+                } catch (err) {
+                    lastErr = err;
+                }
+            }
+            throw lastErr || new Error('No supported codec');
+        }
+
+        const preferVp8OnMobile = isExportMobile && format === 'webm-vp9';
+        const vp8Codecs = ['vp8'];
+        const vp9Codecs = ['vp09.00.10.08', 'vp09'];
+
+        try {
+            if (format === 'webm-vp8') {
+                return await runWithCodecList(vp8Codecs, 'V_VP8');
+            }
+
+            if (preferVp8OnMobile) {
+                exportStatus.textContent = 'Preparing mobile export (VP8)...';
+                return await runWithCodecList(vp8Codecs, 'V_VP8');
+            }
+
+            return await runWithCodecList(vp9Codecs, 'V_VP9');
+        } catch (err) {
+            if (!exportCancelled && format === 'webm-vp9') {
+                exportStatus.textContent = 'Retrying export with VP8...';
+                try {
+                    if (exportEncoder) {
+                        exportEncoder.close();
+                        exportEncoder = null;
+                    }
+                } catch {
+                }
+                return await runWithCodecList(vp8Codecs, 'V_VP8');
+            }
+            throw err;
+        }
+
+        return null;
+    }
+
+    async function exportOfflineTrackGeneratorWebM(start, end, totalFrames, {mimeType}) {
+        const cfg = getTimelineConfig();
+        const baseUs = cfg ? getFrameTimestamp(start, cfg) : 0;
+        let prevAbsUs = null;
+
+        const generator = new MediaStreamTrackGenerator({kind: 'video'});
+        const writer = generator.writable.getWriter();
+        const stream = new MediaStream([generator]);
+
+        const candidates = [mimeType, 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+        let picked = '';
+        for (const c of candidates) {
+            if (c && MediaRecorder.isTypeSupported(c)) {
+                picked = c;
+                break;
+            }
+        }
+        if (!picked) picked = 'video/webm';
+
         const chunks = [];
+        mediaRecorder = new MediaRecorder(stream, {mimeType: picked});
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) chunks.push(e.data);
+        };
+
+        const stopped = new Promise((resolve) => {
+            mediaRecorder.onstop = () => resolve();
+        });
+
+        mediaRecorder.start(200);
+
         let lastProgressUpdate = 0;
         const exportStartTime = performance.now();
 
-        let encoderError = null;
-        exportEncoder = new VideoEncoder({
-            output: (chunk) => {
-                const data = new Uint8Array(chunk.byteLength);
-                chunk.copyTo(data);
-                chunks.push({
-                    data,
-                    timestamp: chunk.timestamp,
-                    duration: chunk.duration,
-                    type: chunk.type
-                });
-            },
-            error: (err) => {
-                encoderError = err;
-            }
-        });
+        try {
+            for (let i = start; i <= end; i++) {
+                if (exportCancelled) break;
 
-        exportEncoder.configure({
-            codec,
-            width,
-            height,
-            bitrate: isMobile ? 3000000 : 15000000,
-            framerate: 30
-        });
+                currentFrameIndex = i;
+                slider.value = i;
+
+                await showFrame(i, {decode: true});
+
+                const absUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
+                const tsUs = Math.max(0, absUs - baseUs);
+
+                let durUs;
+                if (i < end) {
+                    const nextAbsUs = cfg ? getFrameTimestamp(i + 1, cfg) : ((i - start) + 1) * 33333;
+                    durUs = Math.max(1, nextAbsUs - absUs);
+                } else if (prevAbsUs != null) {
+                    durUs = Math.max(1, absUs - prevAbsUs);
+                } else {
+                    durUs = 33333;
+                }
+                prevAbsUs = absUs;
+
+                let vf;
+                try {
+                    vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
+                } catch {
+                    const bmp = await createImageBitmap(canvas);
+                    vf = new VideoFrame(bmp, {timestamp: tsUs, duration: durUs});
+                    try { bmp.close(); } catch {}
+                }
+
+                await writer.write(vf);
+                vf.close();
+
+                const now = performance.now();
+                if (now - lastProgressUpdate > 250) {
+                    const progress = Math.round(((i - start + 1) / totalFrames) * 100);
+                    const totalElapsed = (now - exportStartTime) / 1000;
+                    const framesProcessed = i - start + 1;
+                    const realFPS = framesProcessed / Math.max(0.001, totalElapsed);
+                    exportStatus.textContent = `Exporting: ${progress}% (${framesProcessed}/${totalFrames}) ${realFPS.toFixed(1)} fps`;
+                    lastProgressUpdate = now;
+                }
+            }
+        } finally {
+            try { await writer.close(); } catch {}
+            try { generator.stop(); } catch {}
+            try {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
+            } catch {
+            }
+            await cleanupDecodersAfterExport();
+        }
+
+        await stopped;
+        if (exportCancelled) return null;
+        return new Blob(chunks, {type: picked});
+    }
+
+    async function exportFramesZip(start, end, totalFrames) {
+        const cfg = getTimelineConfig();
+        const zip = new JSZip();
+        const framesFolder = zip.folder('frames');
+
+        const timestampsUs = [];
+        const baseUs = cfg ? getFrameTimestamp(start, cfg) : 0;
+        let lastProgressUpdate = 0;
+        const exportStartTime = performance.now();
+
+        function pad(n, width) {
+            const s = String(n);
+            return s.length >= width ? s : ('0'.repeat(width - s.length) + s);
+        }
+
+        async function canvasToPngBlob() {
+            if (canvas.toBlob) {
+                return await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+            }
+
+            const dataUrl = canvas.toDataURL('image/png');
+            const res = await fetch(dataUrl);
+            return await res.blob();
+        }
 
         for (let i = start; i <= end; i++) {
-            if (exportCancelled || !exportEncoder) break;
+            if (exportCancelled) break;
 
             currentFrameIndex = i;
             slider.value = i;
 
             await showFrame(i, {decode: true});
 
-            const tsUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
-            const nextUs = cfg ? getFrameTimestamp(Math.min(i + 1, end), cfg) : ((i - start) + 1) * 33333;
-            const durUs = Math.max(1, nextUs - tsUs);
+            const absUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
+            timestampsUs.push(Math.max(0, absUs - baseUs));
 
-            const vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
-
-            const makeKeyFrame = (i === start) || ((i - start) % 60 === 0);
-            exportEncoder.encode(vf, {keyFrame: makeKeyFrame});
-            vf.close();
-
-            if (encoderError) throw encoderError;
-
-            if (exportEncoder.encodeQueueSize > 30) {
-                await exportEncoder.flush();
-                if (encoderError) throw encoderError;
-            }
+            const pngBlob = await canvasToPngBlob();
+            const frameNo = i - start;
+            framesFolder.file(`frame_${pad(frameNo, 6)}.png`, pngBlob);
 
             const now = performance.now();
-            if (now - lastProgressUpdate > 150) {
+            if (now - lastProgressUpdate > 500) {
                 const progress = Math.round(((i - start + 1) / totalFrames) * 100);
                 const totalElapsed = (now - exportStartTime) / 1000;
                 const framesProcessed = i - start + 1;
                 const realFPS = framesProcessed / Math.max(0.001, totalElapsed);
-                exportStatus.textContent = `Exporting: ${progress}% (${framesProcessed}/${totalFrames}) ${realFPS.toFixed(1)} fps`;
+                exportStatus.textContent = `Exporting PNGs: ${progress}% (${framesProcessed}/${totalFrames}) ${realFPS.toFixed(1)} fps`;
                 lastProgressUpdate = now;
             }
         }
 
-        if (exportEncoder) {
-            try {
-                await exportEncoder.flush();
-            } catch {
-            }
-            try {
-                exportEncoder.close();
-            } catch {
-            }
-            exportEncoder = null;
-        }
+        await cleanupDecodersAfterExport();
 
-        if (encoderError) throw encoderError;
+        if (exportCancelled) return null;
 
-        if (exportCancelled) {
-            return null;
-        }
+        const manifest = {
+            width: canvas.width,
+            height: canvas.height,
+            startFrame: start,
+            endFrame: end,
+            totalFrames,
+            fpsHint: 30,
+            timestampsUs
+        };
+        zip.file('manifest.json', JSON.stringify(manifest));
 
-        const webmBytes = muxWebM(chunks, {width, height, codecId});
-
-        for (const v of videos) {
-            if (v.decoder) {
-                try {
-                    await v.decoder.flush().catch(() => {
-                    });
-                } catch {
-                }
-                try {
-                    v.decoder.close();
-                } catch {
-                }
-                v.decoder = null;
-                v.lastDecodedFrame = undefined;
-            }
-        }
-
-        return new Blob([webmBytes], {type: 'video/webm'});
+        return await zip.generateAsync({type: 'blob', compression: 'STORE'});
     }
 
     function muxWebM(chunks, {width, height, codecId}) {

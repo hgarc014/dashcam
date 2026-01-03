@@ -722,7 +722,14 @@
             const frame = await decodeFrame(video, frameIdx);
             if (!frame) return;
             try {
-                const bmp = await createImageBitmap(frame);
+                const w = Math.max(1, Math.round(video.width || 1));
+                const h = Math.max(1, Math.round(video.height || 1));
+                let bmp;
+                try {
+                    bmp = await createImageBitmap(frame, {resizeWidth: w, resizeHeight: h, resizeQuality: 'low'});
+                } catch {
+                    bmp = await createImageBitmap(frame);
+                }
                 cachePut(video, frameIdx, bmp);
             } catch {
             } finally {
@@ -873,10 +880,23 @@
     // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
     const MAX_CACHE_PER_VIDEO = isMobile ? 24 : 60;
 
+    function getBitmapCacheKey(video) {
+        const w = Math.max(1, Math.round(video.width || 1));
+        const h = Math.max(1, Math.round(video.height || 1));
+        return `${w}x${h}`;
+    }
+
     function ensureCache(video) {
         if (!video.bitmapCache) {
             video.bitmapCache = new Map(); // frameIdx -> { bmp, t }
             video.cacheTick = 0;
+        }
+        const key = getBitmapCacheKey(video);
+        if (!video.bitmapCacheKey) {
+            video.bitmapCacheKey = key;
+        } else if (video.bitmapCacheKey !== key) {
+            clearVideoCache(video);
+            video.bitmapCacheKey = key;
         }
     }
 
@@ -906,6 +926,13 @@
 
     function cacheGet(video, frameIdx) {
         if (!video.bitmapCache) return null;
+
+        const key = getBitmapCacheKey(video);
+        if (video.bitmapCacheKey && video.bitmapCacheKey !== key) {
+            clearVideoCache(video);
+            video.bitmapCacheKey = key;
+            return null;
+        }
         const v = video.bitmapCache.get(frameIdx);
         if (!v) return null;
         video.cacheTick++;
@@ -1571,32 +1598,31 @@
             }
         } else {
             // Desktop: parallel decode for better performance
-            for (const video of sortedVideos) {
-                if (!video.visible) continue;
-
+            const results = await Promise.all(sortedVideos.map(async (video) => {
+                if (!video.visible) return null;
                 const frameIdx = Math.min(index, video.frames.length - 1);
-
-                // Prefer cached bitmap
                 let bmp = cacheGet(video, frameIdx);
-
-                // Decode if cache miss (always decode during export/playback)
                 if (!bmp) {
                     if (decode) {
                         await ensureFrameCached(video, frameIdx);
                         bmp = cacheGet(video, frameIdx);
                     } else {
-                        // If decode=false but no cache, this will show black - try to decode anyway
                         console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
                     }
                 }
+                return {video, frameIdx, bmp};
+            }));
 
+            for (let i = 0; i < sortedVideos.length; i++) {
+                const r = results[i];
+                if (!r) continue;
+                const {video, frameIdx, bmp} = r;
                 if (bmp) {
                     drawList.push({video, bmp});
                 } else {
                     console.warn(`No bitmap available for ${video.name} frame ${frameIdx}, will show black`);
                 }
 
-                // Pick first SEI available for HUD
                 if (!currentSei && video.frames[frameIdx]?.sei) {
                     currentSei = video.frames[frameIdx].sei;
 

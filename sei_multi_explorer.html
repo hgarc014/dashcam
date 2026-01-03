@@ -909,6 +909,7 @@
 
         if (videos.length) {
             applyCanvasSize();
+            applyLayout(); // Re-layout videos after canvas is properly sized
             setupControls();
             dropOverlay.classList.add('hidden');
         }
@@ -930,14 +931,27 @@
                 timestamp = `${date} ${time.replace(/-/g, ':')}`;
             }
 
-            // Position videos in a grid to avoid overlap
+            // Position videos in a grid based on count
             const videoIndex = videos.length;
-            const cols = 2; // 2 columns for initial layout
+            const cols = 2;
+            const rows = Math.ceil((videoIndex + 1) / cols); // Dynamic rows based on count
             const col = videoIndex % cols;
             const row = Math.floor(videoIndex / cols);
             const spacing = 20;
-            const videoWidth = config.width / 2;
-            const videoHeight = config.height / 2;
+            
+            // Grid layout that adjusts to video count
+            const cellWidth = canvas.width / cols;
+            const cellHeight = canvas.height / rows;
+            
+            // Fit video to cell while maintaining aspect ratio
+            const aspectRatio = config.width / config.height;
+            let videoWidth = cellWidth - spacing * 2;
+            let videoHeight = videoWidth / aspectRatio;
+            
+            if (videoHeight > cellHeight - spacing * 2) {
+                videoHeight = cellHeight - spacing * 2;
+                videoWidth = videoHeight * aspectRatio;
+            }
 
             const videoObj = {
                 id: Date.now() + Math.random(),
@@ -949,11 +963,11 @@
                 decoder: null,
                 lastDecodedFrame: undefined,
                 firstKeyframe,
-                x: spacing + col * (videoWidth + spacing),
-                y: spacing + row * (videoHeight + spacing),
+                x: col * cellWidth + (cellWidth - videoWidth) / 2,
+                y: row * cellHeight + (cellHeight - videoHeight) / 2,
                 width: videoWidth,
                 height: videoHeight,
-                scale: 0.5,
+                scale: videoWidth / config.width,
                 rotation: 0,
                 visible: true,
                 zIndex: videos.length,

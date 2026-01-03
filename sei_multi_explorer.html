@@ -1121,6 +1121,13 @@
     // ---------- Playback ----------
     function play() {
         if (!videos.length || playing) return;
+        
+        // Mobile warning
+        if (isMobile && videos.length > 2) {
+            const proceed = confirm('Mobile playback with multiple videos may be very slow. Continue?');
+            if (!proceed) return;
+        }
+        
         playing = true;
         playBtn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="5" y="4" width="4" height="16"/><rect x="15" y="4" width="4" height="16"/></svg>';
         console.log('[Play] Starting playback from frame', currentFrameIndex, 'isMobile:', isMobile);
@@ -1248,6 +1255,9 @@
         const drawList = [];
         let currentSei = null;
         let currentVideoTimestamp = null;
+        
+        // Track if we successfully decoded any frames
+        let decodedAnyFrame = false;
 
         // Mobile optimization: decode sequentially to avoid overwhelming device
         if (isMobile && decode) {
@@ -1260,6 +1270,7 @@
                 
                 if (bmp) {
                     console.log(`[Mobile] Cache hit for ${video.name} frame ${frameIdx}`);
+                    decodedAnyFrame = true;
                 } else {
                     console.log(`[Mobile] Decoding ${video.name} frame ${frameIdx}...`);
                     try {
@@ -1272,7 +1283,8 @@
                             try {
                                 bmp = await createImageBitmap(frame);
                                 cachePut(video, frameIdx, bmp);
-                            } catch (err) {
+                                decodedAnyFrame = true;
+                            } catch (err){
                                 console.error(`[Mobile] createImageBitmap failed:`, err.message);
                             } finally {
                                 try {
@@ -1366,9 +1378,14 @@
             }
         }
 
-        // Clear
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Clear canvas only if we have frames to draw
+        // On mobile, keep last frame visible if decode failed
+        if (!isMobile || drawList.length > 0 || !decodedAnyFrame) {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        } else {
+            console.log('[Mobile] Keeping previous frame visible, no new frames decoded');
+        }
 
         // Draw frames (cached ImageBitmaps)
         for (const {video, bmp} of drawList) {

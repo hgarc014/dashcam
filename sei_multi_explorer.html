@@ -1554,6 +1554,9 @@
     async function showFrame(index, {decode = true} = {}) {
         if (DEBUG) console.log(`[ShowFrame] Called for frame ${index}, decode: ${decode}`);
         currentFrameIndex = index;
+        if (slider && slider.value !== String(index)) {
+            slider.value = index;
+        }
 
         const cfg = getTimelineConfig();
         const maxIdx = +slider.max;

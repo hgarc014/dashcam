@@ -2221,7 +2221,9 @@
                     const msg = String(err?.message || err);
                     const codecUnsupported = msg.includes('does not support') || msg.includes('No supported codec') || msg.includes('Encoder creation error');
 
-                    if (!exportCancelled && typeof MediaStreamTrackGenerator !== 'undefined' && typeof VideoFrame !== 'undefined') {
+                    // TrackGenerator+MediaRecorder is wall-clock paced; on desktop it can produce slow-motion when rendering is slow.
+                    // Only consider it on real mobile devices.
+                    if (!exportCancelled && isMobileDevice && typeof MediaStreamTrackGenerator !== 'undefined' && typeof VideoFrame !== 'undefined') {
                         try {
                             exportStatus.textContent = 'Retrying export using TrackGenerator...';
                             const tgBlob = await exportOfflineTrackGeneratorWebM(startFrame, endFrame, totalFrames, {mimeType});
@@ -2471,16 +2473,56 @@
 
     async function exportOfflineWebM(start, end, totalFrames, {format}) {
         const cfg = getTimelineConfig();
-        const width = canvas.width;
-        const height = canvas.height;
         const isExportMobile = isMobileDevice;
+
+        let width = canvas.width;
+        let height = canvas.height;
+
+        // Mobile reliability: encode a smaller frame to reduce memory/CPU pressure.
+        // This keeps deterministic timing but sacrifices resolution on mobile.
+        let exportCanvas = null;
+        let exportCtx = null;
+        if (isExportMobile) {
+            const maxW = 1280;
+            const maxH = 720;
+            const scale = Math.min(1, maxW / width, maxH / height);
+            const ew = Math.max(2, Math.floor(width * scale));
+            const eh = Math.max(2, Math.floor(height * scale));
+            if (ew !== width || eh !== height) {
+                exportCanvas = (typeof OffscreenCanvas !== 'undefined') ? new OffscreenCanvas(ew, eh) : document.createElement('canvas');
+                exportCanvas.width = ew;
+                exportCanvas.height = eh;
+                exportCtx = exportCanvas.getContext('2d');
+                width = ew;
+                height = eh;
+            }
+        }
 
         if (window.isSecureContext !== true) {
             throw new Error('Offline WebCodecs export requires a secure context (https or http://localhost).');
         }
 
+        const useConstantFpsTimestamps = (() => {
+            if (!cfg?.timestampsUs?.length) return true;
+            const spanFrames = Math.max(1, end - start);
+            const expectedUs = spanFrames * 33333;
+            const startAbs = getFrameTimestamp(start, cfg);
+            const endAbs = getFrameTimestamp(end, cfg);
+            const actualUs = Math.max(1, endAbs - startAbs);
+            const ratio = actualUs / expectedUs;
+            return ratio < 0.8 || ratio > 1.2;
+        })();
+
         async function yieldToEventLoop() {
             await new Promise(r => setTimeout(r, 0));
+        }
+
+        async function withTimeout(promise, ms, label) {
+            if (!ms || ms <= 0) return await promise;
+            return await Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`Export stalled during ${label}`)), ms))
+            ]);
         }
 
         async function runWithCodec(codec, codecId) {
@@ -2596,7 +2638,7 @@
                 }
 
                 const flushThreshold = isExportMobile ? 0 : 30;
-                const baseUs = cfg ? getFrameTimestamp(start, cfg) : 0;
+                const baseUs = (!useConstantFpsTimestamps && cfg) ? getFrameTimestamp(start, cfg) : 0;
                 let prevAbsUs = null;
 
                 for (let i = start; i <= end; i++) {
@@ -2605,16 +2647,18 @@
                     currentFrameIndex = i;
                     slider.value = i;
 
-                    await showFrame(i, {decode: true});
+                    await withTimeout(showFrame(i, {decode: true}), isExportMobile ? 12000 : 0, 'render/decode');
 
                     if (!ensureEncoderActive()) break;
 
-                    const absUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
-                    const tsUs = Math.max(0, absUs - baseUs);
+                    const absUs = (!useConstantFpsTimestamps && cfg) ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
+                    const tsUs = useConstantFpsTimestamps ? absUs : Math.max(0, absUs - baseUs);
 
                     let durUs;
-                    if (i < end) {
-                        const nextAbsUs = cfg ? getFrameTimestamp(i + 1, cfg) : ((i - start) + 1) * 33333;
+                    if (useConstantFpsTimestamps) {
+                        durUs = 33333;
+                    } else if (i < end) {
+                        const nextAbsUs = getFrameTimestamp(i + 1, cfg);
                         durUs = Math.max(1, nextAbsUs - absUs);
                     } else if (prevAbsUs != null) {
                         durUs = Math.max(1, absUs - prevAbsUs);
@@ -2625,9 +2669,15 @@
 
                     let vf;
                     try {
-                        vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
+                        if (exportCtx) {
+                            exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+                            vf = new VideoFrame(exportCanvas, {timestamp: tsUs, duration: durUs});
+                        } else {
+                            vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
+                        }
                     } catch {
-                        const bmp = await createImageBitmap(canvas);
+                        const src = exportCtx ? exportCanvas : canvas;
+                        const bmp = await withTimeout(createImageBitmap(src), isExportMobile ? 12000 : 0, 'createImageBitmap');
                         vf = new VideoFrame(bmp, {timestamp: tsUs, duration: durUs});
                         try { bmp.close(); } catch {}
                     }
@@ -2655,7 +2705,7 @@
 
                     if (exportEncoder.encodeQueueSize > flushThreshold) {
                         try {
-                            await exportEncoder.flush();
+                            await withTimeout(exportEncoder.flush(), isExportMobile ? 12000 : 0, 'encoder flush');
                         } catch (err) {
                             const msg = String(err?.message || err);
                             if (msg.includes('closed codec') || msg.includes('closed')) {
@@ -2756,6 +2806,18 @@
         const baseUs = cfg ? getFrameTimestamp(start, cfg) : 0;
         let prevAbsUs = null;
 
+        async function yieldToEventLoop() {
+            await new Promise(r => setTimeout(r, 0));
+        }
+
+        async function withTimeout(promise, ms, label) {
+            if (!ms || ms <= 0) return await promise;
+            return await Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`Export stalled during ${label}`)), ms))
+            ]);
+        }
+
         const generator = new MediaStreamTrackGenerator({kind: 'video'});
         const writer = generator.writable.getWriter();
         const stream = new MediaStream([generator]);
@@ -2785,6 +2847,8 @@
         let lastProgressUpdate = 0;
         const exportStartTime = performance.now();
 
+        const stepTimeoutMs = isMobileDevice ? 8000 : 0;
+
         try {
             for (let i = start; i <= end; i++) {
                 if (exportCancelled) break;
@@ -2792,7 +2856,8 @@
                 currentFrameIndex = i;
                 slider.value = i;
 
-                await showFrame(i, {decode: true});
+                exportStatus.textContent = `Exporting: rendering frame ${i - start + 1}/${totalFrames}`;
+                await withTimeout(showFrame(i, {decode: true}), stepTimeoutMs, 'render/decode');
 
                 const absUs = cfg ? getFrameTimestamp(i, cfg) : (i - start) * 33333;
                 const tsUs = Math.max(0, absUs - baseUs);
@@ -2812,13 +2877,17 @@
                 try {
                     vf = new VideoFrame(canvas, {timestamp: tsUs, duration: durUs});
                 } catch {
-                    const bmp = await createImageBitmap(canvas);
+                    exportStatus.textContent = `Exporting: snapshot frame ${i - start + 1}/${totalFrames}`;
+                    const bmp = await withTimeout(createImageBitmap(canvas), stepTimeoutMs, 'createImageBitmap');
                     vf = new VideoFrame(bmp, {timestamp: tsUs, duration: durUs});
                     try { bmp.close(); } catch {}
                 }
 
-                await writer.write(vf);
+                exportStatus.textContent = `Exporting: encoding frame ${i - start + 1}/${totalFrames}`;
+                await withTimeout(writer.write(vf), stepTimeoutMs, 'track write');
                 vf.close();
+
+                await yieldToEventLoop();
 
                 const now = performance.now();
                 if (now - lastProgressUpdate > 250) {

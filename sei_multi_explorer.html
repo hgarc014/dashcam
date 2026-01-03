@@ -1452,11 +1452,11 @@
 
     async function playNext() {
         if (!playing) {
-            console.log('[PlayNext] Called but playing=false');
+            if (DEBUG) console.log('[PlayNext] Called but playing=false');
             return;
         }
         
-        console.log('[PlayNext] Frame', currentFrameIndex + 1, 'isMobile:', isMobile);
+        if (DEBUG) console.log('[PlayNext] Frame', currentFrameIndex + 1, 'isMobile:', isMobile);
 
         currentFrameIndex++;
         
@@ -1464,7 +1464,7 @@
         if (isMobile && videos.length > 1) {
             const skipAmount = videos.length > 2 ? 4 : 2; // Skip more frames with more videos
             currentFrameIndex += skipAmount - 1; // -1 because we already incremented once
-            console.log('[Mobile] Skipping to frame', currentFrameIndex, 'skipAmount:', skipAmount);
+            if (DEBUG) console.log('[Mobile] Skipping to frame', currentFrameIndex, 'skipAmount:', skipAmount);
         }
         
         const maxFrame = cropEnabled ? cropEnd : +slider.max;
@@ -1494,7 +1494,7 @@
         exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (Mobile: ${isMobile})`;
         
         const frameStart = performance.now();
-        console.log(`[PlayNext] About to call showFrame for frame ${currentFrameIndex}`);
+        if (DEBUG) console.log(`[PlayNext] About to call showFrame for frame ${currentFrameIndex}`);
         let frameTime = 0;
         
         try {
@@ -1508,18 +1508,18 @@
             await Promise.race([framePromise, timeoutPromise]);
 
             frameTime = performance.now() - frameStart;
-            console.log(`[PlayNext] Frame ${currentFrameIndex} completed in ${frameTime.toFixed(1)}ms`);
+            if (DEBUG) console.log(`[PlayNext] Frame ${currentFrameIndex} completed in ${frameTime.toFixed(1)}ms`);
         } catch (err) {
-            console.warn('[PlayNext] Decode timeout at frame', currentFrameIndex);
+            if (DEBUG) console.warn('[PlayNext] Decode timeout at frame', currentFrameIndex);
             
             if (err.message.includes('timeout')) {
                 // Fallback: try to render with cached frames only
                 try {
-                    console.log('[PlayNext] Attempting render-only with cache');
+                    if (DEBUG) console.log('[PlayNext] Attempting render-only with cache');
                     await showFrame(currentFrameIndex, {decode: false});
                     exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (cached)`;
                 } catch (renderErr) {
-                    console.warn('[PlayNext] Cache render also failed');
+                    if (DEBUG) console.warn('[PlayNext] Cache render also failed');
                     exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (failed)`;
                 }
             } else {
@@ -1540,9 +1540,9 @@
         const frameSkip = (isMobile && videos.length > 1) ? (videos.length > 2 ? 4 : 2) : 1;
         const delay = (1000 / baseFps) * frameSkip;
         const nextDelay = Math.max(0, delay - frameTime);
-        console.log(`[PlayNext] About to schedule next frame with ${nextDelay}ms delay, baseFps: ${baseFps}, skip: ${frameSkip}`);
+        if (DEBUG) console.log(`[PlayNext] About to schedule next frame with ${nextDelay}ms delay, baseFps: ${baseFps}, skip: ${frameSkip}`);
         playTimer = setTimeout(() => {
-            console.log(`[PlayNext] setTimeout fired, calling playNext`);
+            if (DEBUG) console.log(`[PlayNext] setTimeout fired, calling playNext`);
             playNext();
         }, nextDelay);
     }
@@ -1576,7 +1576,7 @@
 
         // Mobile optimization: decode sequentially to avoid overwhelming device
         if (isMobile && decode) {
-            console.log(`[Mobile] Starting decode for frame ${index}, ${sortedVideos.filter(v => v.visible).length} visible videos`);
+            if (DEBUG) console.log(`[Mobile] Starting decode for frame ${index}, ${sortedVideos.filter(v => v.visible).length} visible videos`);
             
             for (const video of sortedVideos) {
                 if (!video.visible) continue;
@@ -1584,10 +1584,10 @@
                 let bmp = cacheGet(video, frameIdx);
                 
                 if (bmp) {
-                    console.log(`[Mobile] Cache hit for ${video.name} frame ${frameIdx}`);
+                    if (DEBUG) console.log(`[Mobile] Cache hit for ${video.name} frame ${frameIdx}`);
                     decodedAnyFrame = true;
                 } else {
-                    console.log(`[Mobile] Decoding ${video.name} frame ${frameIdx}...`);
+                    if (DEBUG) console.log(`[Mobile] Decoding ${video.name} frame ${frameIdx}...`);
                     try {
                         await ensureFrameCached(video, frameIdx);
                         bmp = cacheGet(video, frameIdx);
@@ -1603,15 +1603,7 @@
                     currentSei = video.frames[frameIdx].sei;
                     if (video.timestamp) {
                         const secondsElapsed = getSecondsElapsed(video, frameIdx);
-                        const baseDate = new Date(video.timestamp);
-                        const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
-                        const year = currentDate.getFullYear();
-                        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-                        const day = String(currentDate.getDate()).padStart(2, '0');
-                        const hours = String(currentDate.getHours()).padStart(2, '0');
-                        const minutes = String(currentDate.getMinutes()).padStart(2, '0');
-                        const seconds = String(currentDate.getSeconds()).padStart(2, '0');
-                        currentVideoTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                        currentVideoTimestamp = getVideoTimestampString(video, secondsElapsed);
                     }
                 }
             }
@@ -1626,7 +1618,7 @@
                         await ensureFrameCached(video, frameIdx);
                         bmp = cacheGet(video, frameIdx);
                     } else {
-                        console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
+                        if (DEBUG) console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
                     }
                 }
                 return {video, frameIdx, bmp};
@@ -1639,7 +1631,7 @@
                 if (bmp) {
                     drawList.push({video, bmp});
                 } else {
-                    console.warn(`No bitmap available for ${video.name} frame ${frameIdx}, will show black`);
+                    if (DEBUG) console.warn(`No bitmap available for ${video.name} frame ${frameIdx}, will show black`);
                 }
 
                 if (!currentSei && video.frames[frameIdx]?.sei) {
@@ -1647,15 +1639,7 @@
 
                     if (video.timestamp) {
                         const secondsElapsed = getSecondsElapsed(video, frameIdx);
-                        const baseDate = new Date(video.timestamp);
-                        const currentDate = new Date(baseDate.getTime() + secondsElapsed * 1000);
-                        const year = currentDate.getFullYear();
-                        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-                        const day = String(currentDate.getDate()).padStart(2, '0');
-                        const hours = String(currentDate.getHours()).padStart(2, '0');
-                        const minutes = String(currentDate.getMinutes()).padStart(2, '0');
-                        const seconds = String(currentDate.getSeconds()).padStart(2, '0');
-                        currentVideoTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                        currentVideoTimestamp = getVideoTimestampString(video, secondsElapsed);
                     }
                 }
             }
@@ -1667,14 +1651,14 @@
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         } else {
-            console.log('[Mobile] Keeping previous frame visible, no new frames decoded');
+            if (DEBUG) console.log('[Mobile] Keeping previous frame visible, no new frames decoded');
         }
 
         // Draw frames (cached ImageBitmaps)
         for (const {video, bmp} of drawList) {
             // Check if bitmap is still valid (not detached)
             if (!bmp || bmp.width === 0 || bmp.height === 0) {
-                console.warn(`Skipping detached bitmap for ${video.name}`);
+                if (DEBUG) console.warn(`Skipping detached bitmap for ${video.name}`);
                 continue;
             }
 
@@ -1709,29 +1693,39 @@
     function drawSelectionAndHud(currentSei, currentVideoTimestamp) {
         // Draw selection handles (if selectedVideo has visible bitmap)
         if (selectedVideo && selectedVideo.visible) {
-            ctx.save();
-
-            // Apply same rotation for box/handles
             if (selectedVideo.rotation !== 0) {
+                ctx.save();
+
                 const centerX = selectedVideo.x + selectedVideo.width / 2;
                 const centerY = selectedVideo.y + selectedVideo.height / 2;
                 ctx.translate(centerX, centerY);
                 ctx.rotate((selectedVideo.rotation * Math.PI) / 180);
                 ctx.translate(-centerX, -centerY);
+
+                ctx.strokeStyle = 'rgba(90, 160, 255, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(selectedVideo.x - 5, selectedVideo.y - 5, selectedVideo.width + 10, selectedVideo.height + 10);
+
+                const handleSize = 12;
+                ctx.fillStyle = 'rgba(90, 160, 255, 0.8)';
+                ctx.fillRect(selectedVideo.x - 5, selectedVideo.y - 5, handleSize, handleSize);
+                ctx.fillRect(selectedVideo.x + selectedVideo.width + 5 - handleSize, selectedVideo.y - 5, handleSize, handleSize);
+                ctx.fillRect(selectedVideo.x - 5, selectedVideo.y + selectedVideo.height + 5 - handleSize, handleSize, handleSize);
+                ctx.fillRect(selectedVideo.x + selectedVideo.width + 5 - handleSize, selectedVideo.y + selectedVideo.height + 5 - handleSize, handleSize, handleSize);
+
+                ctx.restore();
+            } else {
+                ctx.strokeStyle = 'rgba(90, 160, 255, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(selectedVideo.x - 5, selectedVideo.y - 5, selectedVideo.width + 10, selectedVideo.height + 10);
+
+                const handleSize = 12;
+                ctx.fillStyle = 'rgba(90, 160, 255, 0.8)';
+                ctx.fillRect(selectedVideo.x - 5, selectedVideo.y - 5, handleSize, handleSize);
+                ctx.fillRect(selectedVideo.x + selectedVideo.width + 5 - handleSize, selectedVideo.y - 5, handleSize, handleSize);
+                ctx.fillRect(selectedVideo.x - 5, selectedVideo.y + selectedVideo.height + 5 - handleSize, handleSize, handleSize);
+                ctx.fillRect(selectedVideo.x + selectedVideo.width + 5 - handleSize, selectedVideo.y + selectedVideo.height + 5 - handleSize, handleSize, handleSize);
             }
-
-            ctx.strokeStyle = 'rgba(90, 160, 255, 0.8)';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(selectedVideo.x - 5, selectedVideo.y - 5, selectedVideo.width + 10, selectedVideo.height + 10);
-
-            const handleSize = 12;
-            ctx.fillStyle = 'rgba(90, 160, 255, 0.8)';
-            ctx.fillRect(selectedVideo.x - 5, selectedVideo.y - 5, handleSize, handleSize);
-            ctx.fillRect(selectedVideo.x + selectedVideo.width + 5 - handleSize, selectedVideo.y - 5, handleSize, handleSize);
-            ctx.fillRect(selectedVideo.x - 5, selectedVideo.y + selectedVideo.height + 5 - handleSize, handleSize, handleSize);
-            ctx.fillRect(selectedVideo.x + selectedVideo.width + 5 - handleSize, selectedVideo.y + selectedVideo.height + 5 - handleSize, handleSize, handleSize);
-
-            ctx.restore();
 
             // Rotation handle (screen space)
             const centerX = selectedVideo.x + selectedVideo.width / 2;
@@ -1818,7 +1812,7 @@
             const hasDecoder = !!video.decoder;
             const noKeyframeNeeded = !video.needsKeyframe;
             
-            console.log(`[Decoder] Sequential check: lastFrame=${video.lastDecodedFrame}, isNext=${isNextFrame}, hasDecoder=${hasDecoder}, needsKeyframe=${video.needsKeyframe}`);
+            if (DEBUG) console.log(`[Decoder] Sequential check: lastFrame=${video.lastDecodedFrame}, isNext=${isNextFrame}, hasDecoder=${hasDecoder}, needsKeyframe=${video.needsKeyframe}`);
             
             const isSequential = hasLastFrame && isNextFrame && hasDecoder && noKeyframeNeeded;
             
@@ -1826,11 +1820,11 @@
             if (isSequential) {
                 // Sequential playback - just decode this frame
                 startIdx = frameIdx;
-                console.log(`[Decoder] SEQUENTIAL - continuing from frame ${video.lastDecodedFrame}`);
+                if (DEBUG) console.log(`[Decoder] SEQUENTIAL - continuing from frame ${video.lastDecodedFrame}`);
             } else {
                 // Non-sequential or first frame - start from keyframe
                 startIdx = keyIdx;
-                console.log(`[Decoder] NON-SEQUENTIAL - restarting from keyframe ${keyIdx}`);
+                if (DEBUG) console.log(`[Decoder] NON-SEQUENTIAL - restarting from keyframe ${keyIdx}`);
             }
             
             const needsNewDecoder = !video.decoder;
@@ -1850,13 +1844,13 @@
             video.currentOutputFrames = outputFrames;
 
             if (!video.decoder) {
-                console.log(`[Decoder] Creating new VideoDecoder for ${video.name}`);
+                if (DEBUG) console.log(`[Decoder] Creating new VideoDecoder for ${video.name}`);
                 video.decoder = new VideoDecoder({
                     output: (frame) => {
                         // Keep all frames until we select the best one
                         // Access from video.currentOutputFrames which points to the active decode's array
                         if (video.currentOutputFrames) {
-                            console.log(`[Decoder] Output frame ts=${frame.timestamp} for ${video.name}`);
+                            if (DEBUG) console.log(`[Decoder] Output frame ts=${frame.timestamp} for ${video.name}`);
                             video.currentOutputFrames.push(frame);
                             if (video.currentOutputNotify) {
                                 const notify = video.currentOutputNotify;
@@ -1889,7 +1883,7 @@
                     }
                 });
 
-                console.log(`[Decoder] Configuring ${video.name}: codec=${video.config.codec}, size=${video.config.width}x${video.config.height}`);
+                if (DEBUG) console.log(`[Decoder] Configuring ${video.name}: codec=${video.config.codec}, size=${video.config.width}x${video.config.height}`);
                 const description = buildAvcCDescription(video.config.sps, video.config.pps);
                 video.decoder.configure({
                     codec: video.config.codec,
@@ -1897,12 +1891,12 @@
                     codedHeight: video.config.height,
                     description: description
                 });
-                console.log(`[Decoder] Configuration complete for ${video.name}`);
+                if (DEBUG) console.log(`[Decoder] Configuration complete for ${video.name}`);
             }
 
             if (isSequential) {
                 // Sequential - decode frame and wait for output without flush
-                console.log(`[Decoder] Decoding single frame ${frameIdx}`);
+                if (DEBUG) console.log(`[Decoder] Decoding single frame ${frameIdx}`);
                 
                 const chunk = createChunk(video.frames[frameIdx], video.config);
 
@@ -1915,18 +1909,18 @@
                 await Promise.race([framePromise, timeoutPromise]);
                 video.currentOutputNotify = null;
                 
-                console.log(`[Decoder] Sequential decode complete, got ${outputFrames.length} frames`);
+                if (DEBUG) console.log(`[Decoder] Sequential decode complete, got ${outputFrames.length} frames`);
             } else {
                 // Non-sequential - decode from keyframe to target
-                console.log(`[Decoder] Decoding frames ${startIdx} to ${frameIdx}`);
+                if (DEBUG) console.log(`[Decoder] Decoding frames ${startIdx} to ${frameIdx}`);
                 for (let i = startIdx; i <= frameIdx; i++) {
                     const chunk = createChunk(video.frames[i], video.config);
-                    console.log(`[Decoder] Chunk ${i}, keyframe=${video.frames[i].keyframe}`);
+                    if (DEBUG) console.log(`[Decoder] Chunk ${i}, keyframe=${video.frames[i].keyframe}`);
                     video.decoder.decode(chunk);
                 }
 
                 await video.decoder.flush();
-                console.log(`[Decoder] Flush complete, got ${outputFrames.length} frames`);
+                if (DEBUG) console.log(`[Decoder] Flush complete, got ${outputFrames.length} frames`);
             }
 
             // Now select the best frame from all decoded frames
@@ -2029,6 +2023,33 @@
     function getSecondsElapsed(video, frameIdx) {
         const us = getFrameTimestamp(frameIdx, video.config);
         return Math.floor(us / 1_000_000);
+    }
+
+    function getVideoTimestampString(video, secondsElapsed) {
+        if (!video?.timestamp) return null;
+
+        if (video.timestampBaseMs == null) {
+            const ms = Date.parse(video.timestamp);
+            video.timestampBaseMs = Number.isFinite(ms) ? ms : null;
+        }
+        if (video.timestampBaseMs == null) return null;
+
+        if (video.timestampCacheSecond === secondsElapsed && video.timestampCacheString != null) {
+            return video.timestampCacheString;
+        }
+
+        const currentDate = new Date(video.timestampBaseMs + secondsElapsed * 1000);
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(currentDate.getDate()).padStart(2, '0');
+        const hours = String(currentDate.getHours()).padStart(2, '0');
+        const minutes = String(currentDate.getMinutes()).padStart(2, '0');
+        const seconds = String(currentDate.getSeconds()).padStart(2, '0');
+        const s = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+
+        video.timestampCacheSecond = secondsElapsed;
+        video.timestampCacheString = s;
+        return s;
     }
 
     function createChunk(frame, config) {

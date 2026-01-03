@@ -1025,6 +1025,16 @@
 
             const config = mp4.getConfig();
 
+            const timestampsUs = new Array(frames.length);
+            let tsUs = 0;
+            const fallbackDurationMs = (config?.durations?.length ? config.durations[config.durations.length - 1] : (1000 / 30));
+            for (let i = 0; i < frames.length; i++) {
+                timestampsUs[i] = tsUs;
+                const dMs = (config?.durations?.[i] ?? fallbackDurationMs);
+                tsUs += dMs * 1000;
+            }
+            config.timestampsUs = timestampsUs;
+
             const timestampMatch = file.name.match(/(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})/);
             let timestamp = null;
             if (timestampMatch) {
@@ -1820,11 +1830,10 @@
     }
 
     function getFrameTimestamp(frameIndex, config) {
-        let timestampMs = 0;
-        for (let i = 0; i < frameIndex && i < config.durations.length; i++) {
-            timestampMs += config.durations[i];
+        if (config?.timestampsUs && frameIndex >= 0 && frameIndex < config.timestampsUs.length) {
+            return config.timestampsUs[frameIndex];
         }
-        return timestampMs * 1000;
+        return frameIndex * 33333;
     }
 
     function createChunk(frame, config) {

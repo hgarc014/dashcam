@@ -692,7 +692,7 @@
     setTimeout(() => { if (exportStatus.textContent.includes('Mobile:')) exportStatus.textContent = ''; }, 5000);
 
     // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
-    const MAX_CACHE_PER_VIDEO = isMobile ? 6 : 20; // Reduced cache for mobile performance
+    const MAX_CACHE_PER_VIDEO = isMobile ? 12 : 20; // Increased mobile cache for frame skipping
 
     function ensureCache(video) {
         if (!video.bitmapCache) {
@@ -1146,6 +1146,13 @@
         console.log('[PlayNext] Frame', currentFrameIndex + 1, 'isMobile:', isMobile);
 
         currentFrameIndex++;
+        
+        // Mobile optimization: skip every other frame to reduce decode load
+        if (isMobile && videos.length > 1) {
+            currentFrameIndex++;
+            console.log('[Mobile] Skipping to frame', currentFrameIndex, 'for performance');
+        }
+        
         const maxFrame = cropEnabled ? cropEnd : +slider.max;
 
         if (currentFrameIndex >= maxFrame) {
@@ -1176,10 +1183,11 @@
         console.log(`[PlayNext] About to call showFrame for frame ${currentFrameIndex}`);
         
         try {
-            // Add timeout to prevent infinite hangs
+            // Add timeout to prevent infinite hangs - shorter on mobile
+            const timeoutDuration = isMobile ? 2000 : 5000;
             const framePromise = showFrame(currentFrameIndex, {decode: true});
             const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Frame decode timeout')), 5000)
+                setTimeout(() => reject(new Error('Frame decode timeout')), timeoutDuration)
             );
             
             await Promise.race([framePromise, timeoutPromise]);
@@ -1187,23 +1195,26 @@
             const frameTime = performance.now() - frameStart;
             console.log(`[PlayNext] Frame ${currentFrameIndex} completed in ${frameTime.toFixed(1)}ms`);
         } catch (err) {
-            console.error('[PlayNext] Playback error at frame', currentFrameIndex, err);
-            exportStatus.textContent = `Error at frame ${currentFrameIndex}: ${err.message}`;
+            console.warn('[PlayNext] Frame error at', currentFrameIndex, err.message);
             
             if (err.message.includes('timeout')) {
-                console.error('[PlayNext] Frame decode timed out after 5 seconds');
-                // Try to continue with next frame instead of stopping
-                console.log('[PlayNext] Attempting to continue to next frame...');
+                console.warn('[PlayNext] Frame timed out, skipping to next');
+                exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (skipped)`;
+                // Continue to next frame without pausing
             } else {
+                console.error('[PlayNext] Fatal playback error:', err);
                 pause();
-                alert(`Playback stopped at frame ${currentFrameIndex}: ${err.message}`);
+                exportStatus.textContent = `Error: ${err.message}`;
+                alert(`Playback stopped: ${err.message}`);
                 return;
             }
         }
         
-        // Mobile: slower playback for stability with multiple videos
-        const fps = (isMobile && videos.length > 2) ? 15 : 30;
-        const delay = 1000 / fps;
+        // Mobile: adjust playback speed
+        // Skip every other frame = 2x speed, so use 2x delay to maintain ~15 FPS
+        const baseFps = (isMobile && videos.length > 2) ? 15 : 30;
+        const frameSkip = (isMobile && videos.length > 1) ? 2 : 1;
+        const delay = (1000 / baseFps) * frameSkip;
         console.log(`[PlayNext] About to schedule next frame with ${delay}ms delay, fps: ${fps}`);
         playTimer = setTimeout(() => {
             console.log(`[PlayNext] setTimeout fired, calling playNext`);
@@ -1234,7 +1245,7 @@
 
         // Mobile optimization: decode sequentially to avoid overwhelming device
         if (isMobile && decode) {
-            if (isMobile) console.log(`[Mobile] Starting decode for frame ${index}, ${sortedVideos.filter(v => v.visible).length} visible videos`);
+            console.log(`[Mobile] Starting decode for frame ${index}, ${sortedVideos.filter(v => v.visible).length} visible videos`);
             
             for (const video of sortedVideos) {
                 if (!video.visible) continue;
@@ -1242,31 +1253,31 @@
                 let bmp = cacheGet(video, frameIdx);
                 
                 if (bmp) {
-                    if (isMobile) console.log(`[Mobile] Cache hit for ${video.name} frame ${frameIdx}`);
+                    console.log(`[Mobile] Cache hit for ${video.name} frame ${frameIdx}`);
                 } else {
-                    if (isMobile) console.log(`[Mobile] Cache miss for ${video.name} frame ${frameIdx}, decoding...`);
+                    console.log(`[Mobile] Decoding ${video.name} frame ${frameIdx}...`);
                     try {
                         const decodeStart = performance.now();
                         const frame = await decodeFrame(video, frameIdx);
                         const decodeTime = performance.now() - decodeStart;
                         
                         if (frame) {
-                            if (isMobile) console.log(`[Mobile] Decoded ${video.name} frame ${frameIdx} in ${decodeTime.toFixed(1)}ms`);
+                            console.log(`[Mobile] Decoded ${video.name} in ${decodeTime.toFixed(0)}ms`);
                             try {
                                 bmp = await createImageBitmap(frame);
                                 cachePut(video, frameIdx, bmp);
                             } catch (err) {
-                                console.error(`[Mobile] createImageBitmap failed for ${video.name} frame ${frameIdx}:`, err);
+                                console.error(`[Mobile] createImageBitmap failed:`, err.message);
                             } finally {
                                 try {
                                     frame.close();
                                 } catch {}
                             }
                         } else {
-                            console.warn(`[Mobile] Decode returned null for ${video.name} frame ${frameIdx}`);
+                            console.warn(`[Mobile] Decode returned null`);
                         }
                     } catch (err) {
-                        console.error(`[Mobile] Decode failed for ${video.name} frame ${frameIdx}:`, err);
+                        console.error(`[Mobile] Decode failed:`, err.message);
                     }
                 }
                 

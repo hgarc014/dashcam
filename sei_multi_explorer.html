@@ -1604,9 +1604,22 @@
 
             const targetTs = video.frames[frameIdx].index * 33333;
 
-            // After flush(), decoder REQUIRES a keyframe - so we must ALWAYS start from keyframe
-            // Never try to continue from lastDecodedFrame after flush()
-            const startIdx = keyIdx;
+            // Optimization: if this frame is sequential to last decoded, just decode this one frame
+            // Only flush and restart from keyframe when jumping or seeking
+            const isSequential = video.lastDecodedFrame !== undefined && 
+                                 frameIdx === video.lastDecodedFrame + 1 && 
+                                 video.decoder;
+            
+            let startIdx;
+            if (isSequential) {
+                // Sequential playback - just decode this frame
+                startIdx = frameIdx;
+                console.log(`[Decoder] Sequential - continuing from frame ${video.lastDecodedFrame}`);
+            } else {
+                // Non-sequential or first frame - start from keyframe
+                startIdx = keyIdx;
+                console.log(`[Decoder] Non-sequential - restarting from keyframe ${keyIdx}`);
+            }
             
             const needsNewDecoder = !video.decoder;
 
@@ -1667,17 +1680,26 @@
                 console.log(`[Decoder] Configuration complete for ${video.name}`);
             }
 
-            console.log(`[Decoder] Decoding frames ${startIdx} to ${frameIdx} for ${video.name}`);
-            for (let i = startIdx; i <= frameIdx; i++) {
-                const chunk = createChunk(video.frames[i], video.config);
-                console.log(`[Decoder] Decode chunk ${i}, keyframe=${video.frames[i].keyframe}, size=${chunk.byteLength}`);
+            if (isSequential) {
+                // Sequential - just decode the target frame
+                console.log(`[Decoder] Decoding single frame ${frameIdx}`);
+                const chunk = createChunk(video.frames[frameIdx], video.config);
                 video.decoder.decode(chunk);
-            }
+                
+                await video.decoder.flush();
+                console.log(`[Decoder] Sequential flush complete, got ${outputFrames.length} frames`);
+            } else {
+                // Non-sequential - decode from keyframe to target
+                console.log(`[Decoder] Decoding frames ${startIdx} to ${frameIdx}`);
+                for (let i = startIdx; i <= frameIdx; i++) {
+                    const chunk = createChunk(video.frames[i], video.config);
+                    console.log(`[Decoder] Chunk ${i}, keyframe=${video.frames[i].keyframe}`);
+                    video.decoder.decode(chunk);
+                }
 
-            // Wait for all frames to be decoded
-            console.log(`[Decoder] Flushing decoder for ${video.name}`);
-            await video.decoder.flush();
-            console.log(`[Decoder] Flush complete, got ${outputFrames.length} frames`);
+                await video.decoder.flush();
+                console.log(`[Decoder] Flush complete, got ${outputFrames.length} frames`);
+            }
 
             // Now select the best frame from all decoded frames
             if (outputFrames.length === 0) {

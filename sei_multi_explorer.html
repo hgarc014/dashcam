@@ -1938,6 +1938,9 @@
 
     function handleCanvasMouseMove(e) {
         const {x, y} = getCanvasXYFromClient(e);
+        
+        // During playback/export: only handle active interactions, skip hover detection
+        const isActiveOperation = playing || (mediaRecorder && mediaRecorder.state === 'recording');
 
         // HUD resize
         if (resizingHudCorner) {
@@ -2028,6 +2031,11 @@
             return;
         }
 
+        // Skip hover detection during playback/export to improve performance
+        if (isActiveOperation) {
+            return;
+        }
+        
         // Cursor hover hints (render-only refresh only when hover state changes)
         const wasHoveringHud = isHoveringHud;
         isHoveringHud = false;
@@ -2129,7 +2137,8 @@
 
         if (!cursorSet) canvas.style.cursor = 'default';
 
-        if (wasHoveringHud !== isHoveringHud) {
+        // Skip render during playback/export unless hover state actually changed
+        if (!isActiveOperation && wasHoveringHud !== isHoveringHud) {
             showFrame(currentFrameIndex, {decode: false});
         }
     }
@@ -2151,8 +2160,11 @@
         activeSnapZone = null;
         canvas.style.cursor = 'default';
 
-        // final redraw (render-only)
-        if (videos.length) showFrame(currentFrameIndex, {decode: false});
+        // Skip redraw during playback/export for better performance
+        const isActiveOperation = playing || (mediaRecorder && mediaRecorder.state === 'recording');
+        if (videos.length && !isActiveOperation) {
+            showFrame(currentFrameIndex, {decode: false});
+        }
     }
 
     // Touch support: map touches to the same handlers (render-only movement)

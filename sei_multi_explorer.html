@@ -1173,29 +1173,49 @@
         exportStatus.textContent = `Playing frame ${currentFrameIndex}/${maxFrame} (Mobile: ${isMobile})`;
         
         const frameStart = performance.now();
+        console.log(`[PlayNext] About to call showFrame for frame ${currentFrameIndex}`);
+        
         try {
-            await showFrame(currentFrameIndex, {decode: true});
+            // Add timeout to prevent infinite hangs
+            const framePromise = showFrame(currentFrameIndex, {decode: true});
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Frame decode timeout')), 5000)
+            );
+            
+            await Promise.race([framePromise, timeoutPromise]);
+            
             const frameTime = performance.now() - frameStart;
-            console.log(`[PlayNext] Frame ${currentFrameIndex} decoded in ${frameTime.toFixed(1)}ms`);
+            console.log(`[PlayNext] Frame ${currentFrameIndex} completed in ${frameTime.toFixed(1)}ms`);
         } catch (err) {
             console.error('[PlayNext] Playback error at frame', currentFrameIndex, err);
-            pause();
             exportStatus.textContent = `Error at frame ${currentFrameIndex}: ${err.message}`;
-            alert(`Playback stopped at frame ${currentFrameIndex}: ${err.message}`);
-            return;
+            
+            if (err.message.includes('timeout')) {
+                console.error('[PlayNext] Frame decode timed out after 5 seconds');
+                // Try to continue with next frame instead of stopping
+                console.log('[PlayNext] Attempting to continue to next frame...');
+            } else {
+                pause();
+                alert(`Playback stopped at frame ${currentFrameIndex}: ${err.message}`);
+                return;
+            }
         }
         
         // Mobile: slower playback for stability with multiple videos
         const fps = (isMobile && videos.length > 2) ? 15 : 30;
         const delay = 1000 / fps;
-        console.log(`[PlayNext] Scheduling next frame in ${delay}ms, fps: ${fps}`);
-        playTimer = setTimeout(playNext, delay);
+        console.log(`[PlayNext] About to schedule next frame with ${delay}ms delay, fps: ${fps}`);
+        playTimer = setTimeout(() => {
+            console.log(`[PlayNext] setTimeout fired, calling playNext`);
+            playNext();
+        }, delay);
     }
 
     // ---------- Rendering vs Decoding ----------
     // showFrame(index, {decode:true|false})
     // decode=false => render-only using cached ImageBitmaps (fast for drag/resize/rotate)
     async function showFrame(index, {decode = true} = {}) {
+        console.log(`[ShowFrame] Called for frame ${index}, decode: ${decode}`);
         currentFrameIndex = index;
 
         // Time display (assumes 30fps)

@@ -1611,20 +1611,24 @@
             // Optimization: if this frame is sequential to last decoded, just decode this one frame
             // Only flush and restart from keyframe when jumping or seeking
             // IMPORTANT: After flush(), decoder requires keyframe, so can't do sequential
-            const isSequential = video.lastDecodedFrame !== undefined && 
-                                 frameIdx === video.lastDecodedFrame + 1 && 
-                                 video.decoder && 
-                                 !video.needsKeyframe;
+            const hasLastFrame = video.lastDecodedFrame !== undefined;
+            const isNextFrame = frameIdx === video.lastDecodedFrame + 1;
+            const hasDecoder = !!video.decoder;
+            const noKeyframeNeeded = !video.needsKeyframe;
+            
+            console.log(`[Decoder] Sequential check: lastFrame=${video.lastDecodedFrame}, isNext=${isNextFrame}, hasDecoder=${hasDecoder}, needsKeyframe=${video.needsKeyframe}`);
+            
+            const isSequential = hasLastFrame && isNextFrame && hasDecoder && noKeyframeNeeded;
             
             let startIdx;
             if (isSequential) {
                 // Sequential playback - just decode this frame
                 startIdx = frameIdx;
-                console.log(`[Decoder] Sequential - continuing from frame ${video.lastDecodedFrame}`);
+                console.log(`[Decoder] SEQUENTIAL - continuing from frame ${video.lastDecodedFrame}`);
             } else {
                 // Non-sequential or first frame - start from keyframe
                 startIdx = keyIdx;
-                console.log(`[Decoder] Non-sequential - restarting from keyframe ${keyIdx}`);
+                console.log(`[Decoder] NON-SEQUENTIAL - restarting from keyframe ${keyIdx}`);
             }
             
             const needsNewDecoder = !video.decoder;
@@ -1723,9 +1727,6 @@
 
                 await video.decoder.flush();
                 console.log(`[Decoder] Flush complete, got ${outputFrames.length} frames`);
-                
-                // After flush, decoder requires keyframe for next decode
-                video.needsKeyframe = true;
             }
 
             // Now select the best frame from all decoded frames
@@ -1758,11 +1759,16 @@
 
             if (best) {
                 video.lastDecodedFrame = frameIdx;
-                // Sequential decode didn't flush, so we can continue sequentially
+                
+                // Sequential decode didn't flush, so next frame can continue sequentially
                 if (isSequential) {
                     video.needsKeyframe = false;
+                } else {
+                    // Non-sequential decode with flush completed successfully
+                    // Next frame can now decode sequentially (no keyframe needed)
+                    video.needsKeyframe = false;
                 }
-                // Note: if non-sequential, needsKeyframe was already set to true after flush
+                
                 return best;
             } else {
                 return null;

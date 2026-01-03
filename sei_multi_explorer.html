@@ -706,6 +706,9 @@
     let debugLogs = [];
     
     function addDebugLog(type, ...args) {
+        // Only log when debug panel is open to save memory/performance
+        if (debugPanel.style.display === 'none') return;
+        
         const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
         const message = args.map(arg => 
             typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
@@ -726,23 +729,24 @@
         debugOutput.scrollTop = debugOutput.scrollHeight;
     }
     
-    // Intercept console methods
+    // Intercept console methods - only show in debug panel, not browser console
     const originalLog = console.log;
     const originalError = console.error;
     const originalWarn = console.warn;
     
     console.log = function(...args) {
-        originalLog.apply(console, args);
+        // Only show in debug panel
         addDebugLog('log', ...args);
     };
     
     console.error = function(...args) {
+        // Still show errors in browser console for critical issues
         originalError.apply(console, args);
         addDebugLog('error', ...args);
     };
     
     console.warn = function(...args) {
-        originalWarn.apply(console, args);
+        // Only show in debug panel
         addDebugLog('warn', ...args);
     };
     
@@ -1606,9 +1610,11 @@
 
             // Optimization: if this frame is sequential to last decoded, just decode this one frame
             // Only flush and restart from keyframe when jumping or seeking
+            // IMPORTANT: After flush(), decoder requires keyframe, so can't do sequential
             const isSequential = video.lastDecodedFrame !== undefined && 
                                  frameIdx === video.lastDecodedFrame + 1 && 
-                                 video.decoder;
+                                 video.decoder && 
+                                 !video.needsKeyframe;
             
             let startIdx;
             if (isSequential) {
@@ -1681,13 +1687,31 @@
             }
 
             if (isSequential) {
-                // Sequential - just decode the target frame
+                // Sequential - decode frame and wait for output without flush
                 console.log(`[Decoder] Decoding single frame ${frameIdx}`);
-                const chunk = createChunk(video.frames[frameIdx], video.config);
-                video.decoder.decode(chunk);
                 
-                await video.decoder.flush();
-                console.log(`[Decoder] Sequential flush complete, got ${outputFrames.length} frames`);
+                const chunk = createChunk(video.frames[frameIdx], video.config);
+                
+                // Create promise that resolves when we get a frame output
+                const framePromise = new Promise((resolve) => {
+                    const checkInterval = setInterval(() => {
+                        if (outputFrames.length > 0) {
+                            clearInterval(checkInterval);
+                            resolve();
+                        }
+                    }, 5);
+                    
+                    // Timeout after 100ms
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }, 100);
+                });
+                
+                video.decoder.decode(chunk);
+                await framePromise;
+                
+                console.log(`[Decoder] Sequential decode complete, got ${outputFrames.length} frames`);
             } else {
                 // Non-sequential - decode from keyframe to target
                 console.log(`[Decoder] Decoding frames ${startIdx} to ${frameIdx}`);
@@ -1699,6 +1723,9 @@
 
                 await video.decoder.flush();
                 console.log(`[Decoder] Flush complete, got ${outputFrames.length} frames`);
+                
+                // After flush, decoder requires keyframe for next decode
+                video.needsKeyframe = true;
             }
 
             // Now select the best frame from all decoded frames
@@ -1731,6 +1758,11 @@
 
             if (best) {
                 video.lastDecodedFrame = frameIdx;
+                // Sequential decode didn't flush, so we can continue sequentially
+                if (isSequential) {
+                    video.needsKeyframe = false;
+                }
+                // Note: if non-sequential, needsKeyframe was already set to true after flush
                 return best;
             } else {
                 return null;

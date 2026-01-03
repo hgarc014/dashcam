@@ -658,7 +658,7 @@
 
     let hudX = null, hudY = null;
     let hudScale = 1.0;
-    let hudWidth = 420, hudHeight = 340;
+    let hudWidth = 420, hudHeight = 240;
     let hudVisible = true;
 
     let resizingHudCorner = null;
@@ -1158,23 +1158,36 @@
             // Prefer cached bitmap
             let bmp = cacheGet(video, frameIdx);
 
-            // Decode only if requested AND cache miss
-            if (!bmp && decode) {
-                const frame = await decodeFrame(video, frameIdx);
-                if (frame) {
-                    try {
-                        bmp = await createImageBitmap(frame);
-                        cachePut(video, frameIdx, bmp);
-                    } finally {
+            // Decode if cache miss (always decode during export/playback)
+            if (!bmp) {
+                if (decode) {
+                    const frame = await decodeFrame(video, frameIdx);
+                    if (frame) {
                         try {
-                            frame.close();
-                        } catch {
+                            bmp = await createImageBitmap(frame);
+                            cachePut(video, frameIdx, bmp);
+                        } catch (err) {
+                            console.error('createImageBitmap failed:', err);
+                        } finally {
+                            try {
+                                frame.close();
+                            } catch {
+                            }
                         }
+                    } else {
+                        console.warn(`decodeFrame returned null for ${video.name} frame ${frameIdx}`);
                     }
+                } else {
+                    // If decode=false but no cache, this will show black - try to decode anyway
+                    console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
                 }
             }
 
-            if (bmp) drawList.push({video, bmp});
+            if (bmp) {
+                drawList.push({video, bmp});
+            } else {
+                console.warn(`No bitmap available for ${video.name} frame ${frameIdx}, will show black`);
+            }
 
             // Pick first SEI available for HUD
             if (!currentSei && video.frames[frameIdx]?.sei) {
@@ -1309,7 +1322,32 @@
     }
 
     // ---------- Decoder: timestamp-based target selection ----------
+    // Queue to prevent overlapping decode operations per video
     async function decodeFrame(video, frameIdx) {
+        // If a decode is already in progress, wait for it
+        if (video.decodeInProgress) {
+            await video.decodeInProgress;
+        }
+        
+        // Create a promise for this decode operation
+        let resolveDecodePromise;
+        video.decodeInProgress = new Promise(resolve => {
+            resolveDecodePromise = resolve;
+        });
+        
+        try {
+            const result = await decodeFrameInternal(video, frameIdx);
+            resolveDecodePromise();
+            video.decodeInProgress = null;
+            return result;
+        } catch (err) {
+            resolveDecodePromise();
+            video.decodeInProgress = null;
+            throw err;
+        }
+    }
+    
+    async function decodeFrameInternal(video, frameIdx) {
         try {
             let keyIdx = frameIdx;
             while (keyIdx >= 0 && !video.frames[keyIdx].keyframe) keyIdx--;
@@ -1317,99 +1355,97 @@
 
             const targetTs = video.frames[frameIdx].index * 33333;
 
-            const needsNewDecoder =
-                !video.decoder ||
-                video.lastDecodedFrame === undefined ||
-                video.lastDecodedFrame > frameIdx ||
-                (frameIdx - video.lastDecodedFrame) > 20;
+            // After flush(), decoder REQUIRES a keyframe - so we must ALWAYS start from keyframe
+            // Never try to continue from lastDecodedFrame after flush()
+            const startIdx = keyIdx;
+            
+            const needsNewDecoder = !video.decoder;
 
             if (needsNewDecoder && video.decoder) {
-                try {
-                    await video.decoder.flush().catch(() => {
-                    });
-                } catch {
-                }
                 try {
                     video.decoder.close();
                 } catch {
                 }
                 video.decoder = null;
-                video.lastDecodedFrame = undefined;
             }
 
-            const startIdx = (!needsNewDecoder && video.lastDecodedFrame != null)
-                ? video.lastDecodedFrame + 1
-                : keyIdx;
+            // Use a local array for this decode operation to avoid race conditions
+            const outputFrames = [];
+            
+            // Store reference on video so the callback can access it
+            video.currentOutputFrames = outputFrames;
 
-            return await new Promise((resolve) => {
-                let best = null;
-                let bestDelta = Infinity;
-                let finished = false;
-
-                const finish = () => {
-                    if (finished) return;
-                    finished = true;
-
-                    if (best) {
-                        video.lastDecodedFrame = frameIdx;
-                        resolve(best);
-                    } else {
-                        resolve(null);
-                    }
-                };
-
-                if (!video.decoder) {
-                    video.decoder = new VideoDecoder({
-                        output: (frame) => {
-                            const delta = Math.abs(frame.timestamp - targetTs);
-                            if (delta < bestDelta) {
-                                if (best) {
-                                    try {
-                                        best.close();
-                                    } catch {
-                                    }
-                                }
-                                best = frame;
-                                bestDelta = delta;
-                            } else {
-                                frame.close();
-                            }
-
-                            // exact match? resolve quickly
-                            if (bestDelta === 0) Promise.resolve().then(finish);
-                        },
-                        error: (err) => {
-                            console.error('VideoDecoder error:', err);
-                            try {
-                                video.decoder?.close();
-                            } catch {
-                            }
-                            video.decoder = null;
-                            video.lastDecodedFrame = undefined;
-                            if (best) {
-                                try {
-                                    best.close();
-                                } catch {
-                                }
-                            }
-                            resolve(null);
+            if (!video.decoder) {
+                video.decoder = new VideoDecoder({
+                    output: (frame) => {
+                        // Keep all frames until we select the best one
+                        // Access from video.currentOutputFrames which points to the active decode's array
+                        if (video.currentOutputFrames) {
+                            video.currentOutputFrames.push(frame);
+                        } else {
+                            frame.close();
                         }
-                    });
+                    },
+                    error: (err) => {
+                        console.error('VideoDecoder error:', err);
+                        try {
+                            video.decoder?.close();
+                        } catch {
+                        }
+                        video.decoder = null;
+                        video.lastDecodedFrame = undefined;
+                        // Clean up any frames
+                        if (video.currentOutputFrames) {
+                            for (const f of video.currentOutputFrames) {
+                                try { f.close(); } catch {}
+                            }
+                            video.currentOutputFrames = null;
+                        }
+                    }
+                });
 
-                    video.decoder.configure({
-                        codec: video.config.codec,
-                        codedWidth: video.config.width,
-                        codedHeight: video.config.height
-                    });
+                video.decoder.configure({
+                    codec: video.config.codec,
+                    codedWidth: video.config.width,
+                    codedHeight: video.config.height
+                });
+            }
+
+            for (let i = startIdx; i <= frameIdx; i++) {
+                video.decoder.decode(createChunk(video.frames[i], video.config));
+            }
+
+            // Wait for all frames to be decoded
+            await video.decoder.flush();
+
+            // Now select the best frame from all decoded frames
+            let best = null;
+            let bestDelta = Infinity;
+
+            for (const frame of outputFrames) {
+                const delta = Math.abs(frame.timestamp - targetTs);
+                if (delta < bestDelta) {
+                    // Close previous best
+                    if (best) {
+                        try { best.close(); } catch {}
+                    }
+                    best = frame;
+                    bestDelta = delta;
+                } else {
+                    // Close non-best frames
+                    try { frame.close(); } catch {}
                 }
+            }
 
-                for (let i = startIdx; i <= frameIdx; i++) {
-                    video.decoder.decode(createChunk(video.frames[i], video.config));
-                }
+            // Clear the reference after processing
+            video.currentOutputFrames = null;
 
-                // fallback: if no exact timestamp appears, return nearest after short delay
-                setTimeout(finish, 150);
-            });
+            if (best) {
+                video.lastDecodedFrame = frameIdx;
+                return best;
+            } else {
+                return null;
+            }
 
         } catch (err) {
             console.error('Decode error:', err);

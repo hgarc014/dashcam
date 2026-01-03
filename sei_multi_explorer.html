@@ -663,6 +663,93 @@
     let currentFrameIndex = 0;
     let playing = false, playTimer = null;
 
+    const DEBUG = false;
+
+    let sortedVideosCache = [];
+    let sortedVideosDirty = true;
+    function markSortedVideosDirty() {
+        sortedVideosDirty = true;
+    }
+    function getSortedVideos() {
+        if (sortedVideosDirty) {
+            sortedVideosCache = [...videos].sort((a, b) => a.zIndex - b.zIndex);
+            sortedVideosDirty = false;
+        }
+        return sortedVideosCache;
+    }
+
+    let playbackRafId = null;
+    let playbackStartMs = 0;
+    let playbackStartUs = 0;
+    let playbackInFlight = null;
+    let playbackPendingFrameIdx = null;
+    let playbackPrefetchToken = 0;
+
+    let debugOpen = false;
+
+    function getTimelineConfig() {
+        return videos.length ? videos[0].config : null;
+    }
+
+    function findFrameIndexForTimeUs(timeUs, config) {
+        const ts = config?.timestampsUs;
+        if (!ts || !ts.length) return 0;
+
+        let lo = 0;
+        let hi = ts.length - 1;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi + 1) / 2);
+            if (ts[mid] <= timeUs) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
+    }
+
+    function withVideoDecodeLock(video, fn) {
+        const prev = video.decodeLock || Promise.resolve();
+        const next = prev.then(fn, fn);
+        video.decodeLock = next.catch(() => {});
+        return next;
+    }
+
+    async function ensureFrameCached(video, frameIdx) {
+        if (frameIdx < 0 || frameIdx >= video.frames.length) return;
+        if (!video.visible) return;
+        if (cacheGet(video, frameIdx)) return;
+
+        await withVideoDecodeLock(video, async () => {
+            if (cacheGet(video, frameIdx)) return;
+            const frame = await decodeFrame(video, frameIdx);
+            if (!frame) return;
+            try {
+                const bmp = await createImageBitmap(frame);
+                cachePut(video, frameIdx, bmp);
+            } catch {
+            } finally {
+                try { frame.close(); } catch {}
+            }
+        });
+    }
+
+    function schedulePrefetch(currentIdx) {
+        const token = ++playbackPrefetchToken;
+        const visibleCount = videos.filter(v => v.visible).length;
+        const ahead = isMobile ? 4 : (visibleCount > 2 ? 6 : 12);
+        const start = currentIdx + 1;
+        const end = currentIdx + ahead;
+
+        const sorted = getSortedVideos();
+        for (const video of sorted) {
+            (async () => {
+                for (let i = start; i <= end; i++) {
+                    if (!playing) return;
+                    if (token !== playbackPrefetchToken) return;
+                    await ensureFrameCached(video, Math.min(i, video.frames.length - 1));
+                }
+            })();
+        }
+    }
+
     let hudRenderer = new SeiCanvasHud();
     let mediaRecorder = null;
     let recordedChunks = [];
@@ -735,7 +822,7 @@
     const originalWarn = console.warn;
     
     console.log = function(...args) {
-        // Only show in debug panel
+        if (!debugOpen) return;
         addDebugLog('log', ...args);
     };
     
@@ -746,12 +833,13 @@
     };
     
     console.warn = function(...args) {
-        // Only show in debug panel
+        if (!debugOpen) return;
         addDebugLog('warn', ...args);
     };
     
     debugToggle.onclick = () => {
         debugPanel.style.display = debugPanel.style.display === 'none' ? 'flex' : 'none';
+        debugOpen = debugPanel.style.display !== 'none';
     };
     
     debugClear.onclick = () => {
@@ -776,14 +864,14 @@
     };
     
     // Show mobile detection status immediately
-    console.log('Mobile Detection:', isMobile);
-    console.log('User Agent:', navigator.userAgent);
-    console.log('Window Width:', window.innerWidth);
+    if (DEBUG) console.log('Mobile Detection:', isMobile);
+    if (DEBUG) console.log('User Agent:', navigator.userAgent);
+    if (DEBUG) console.log('Window Width:', window.innerWidth);
     exportStatus.textContent = `Mobile: ${isMobile} | UA: ${navigator.userAgent.substring(0, 50)}...`;
     setTimeout(() => { if (exportStatus.textContent.includes('Mobile:')) exportStatus.textContent = ''; }, 5000);
 
     // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
-    const MAX_CACHE_PER_VIDEO = isMobile ? 12 : 20; // Increased mobile cache for frame skipping
+    const MAX_CACHE_PER_VIDEO = isMobile ? 24 : 60;
 
     function ensureCache(video) {
         if (!video.bitmapCache) {
@@ -1088,6 +1176,7 @@
             };
 
             videos.push(videoObj);
+            markSortedVideosDirty();
             updateVideoList();
         } catch (err) {
             alert(`Failed to load ${file.name}: ${err.message}`);
@@ -1111,6 +1200,7 @@
         }
         clearVideoCache(v);
         videos.splice(index, 1);
+        markSortedVideosDirty();
         updateVideoList();
 
         if (!videos.length) resetApp();
@@ -1201,6 +1291,7 @@
         }
 
         videos = [];
+        markSortedVideosDirty();
         currentFrameIndex = 0;
 
         slider.max = 0;
@@ -1232,9 +1323,18 @@
         
         playing = true;
         playBtn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="5" y="4" width="4" height="16"/><rect x="15" y="4" width="4" height="16"/></svg>';
-        console.log('[Play] Starting playback from frame', currentFrameIndex, 'isMobile:', isMobile);
+        if (DEBUG) console.log('[Play] Starting playback from frame', currentFrameIndex, 'isMobile:', isMobile);
         exportStatus.textContent = `Playing frame ${currentFrameIndex}... (Mobile: ${isMobile})`;
-        playNext();
+
+        const cfg = getTimelineConfig();
+        playbackStartMs = performance.now();
+        playbackStartUs = cfg ? getFrameTimestamp(currentFrameIndex, cfg) : 0;
+        playbackPendingFrameIdx = null;
+        playbackInFlight = null;
+        schedulePrefetch(currentFrameIndex);
+
+        if (playbackRafId) cancelAnimationFrame(playbackRafId);
+        playbackRafId = requestAnimationFrame(playbackLoop);
     }
 
     function pause() {
@@ -1244,6 +1344,64 @@
             clearTimeout(playTimer);
             playTimer = null;
         }
+
+        if (playbackRafId) {
+            cancelAnimationFrame(playbackRafId);
+            playbackRafId = null;
+        }
+        playbackPendingFrameIdx = null;
+        playbackInFlight = null;
+        playbackPrefetchToken++;
+    }
+
+    function playbackLoop(nowMs) {
+        if (!playing) return;
+
+        const cfg = getTimelineConfig();
+        if (!cfg || !cfg.timestampsUs || !cfg.timestampsUs.length) {
+            pause();
+            return;
+        }
+
+        const maxFrame = cropEnabled ? cropEnd : +slider.max;
+
+        const elapsedUs = (nowMs - playbackStartMs) * 1000;
+        let desiredUs = playbackStartUs + elapsedUs;
+        let frameIdx = findFrameIndexForTimeUs(desiredUs, cfg);
+
+        if (cropEnabled) {
+            const span = Math.max(1, cropEnd - cropStart);
+            if (frameIdx >= cropEnd) {
+                const overflow = (frameIdx - cropStart) % span;
+                frameIdx = cropStart + overflow;
+                playbackStartMs = nowMs;
+                playbackStartUs = getFrameTimestamp(frameIdx, cfg);
+            } else if (frameIdx < cropStart) {
+                frameIdx = cropStart;
+                playbackStartMs = nowMs;
+                playbackStartUs = getFrameTimestamp(frameIdx, cfg);
+            }
+        } else {
+            if (frameIdx >= maxFrame) {
+                pause();
+                return;
+            }
+        }
+
+        if (frameIdx !== currentFrameIndex) {
+            playbackPendingFrameIdx = frameIdx;
+            schedulePrefetch(frameIdx);
+        }
+
+        if (!playbackInFlight && playbackPendingFrameIdx != null) {
+            const target = playbackPendingFrameIdx;
+            playbackPendingFrameIdx = null;
+            playbackInFlight = showFrame(target, {decode: true}).catch(() => {}).finally(() => {
+                playbackInFlight = null;
+            });
+        }
+
+        playbackRafId = requestAnimationFrame(playbackLoop);
     }
 
     async function playNext() {
@@ -1347,19 +1505,22 @@
     // showFrame(index, {decode:true|false})
     // decode=false => render-only using cached ImageBitmaps (fast for drag/resize/rotate)
     async function showFrame(index, {decode = true} = {}) {
-        console.log(`[ShowFrame] Called for frame ${index}, decode: ${decode}`);
+        if (DEBUG) console.log(`[ShowFrame] Called for frame ${index}, decode: ${decode}`);
         currentFrameIndex = index;
 
-        // Time display (assumes 30fps)
-        const totalSeconds = Math.floor(index / 30);
-        const currentMin = Math.floor(totalSeconds / 60);
-        const currentSec = totalSeconds % 60;
-        const totalMin = Math.floor((+slider.max / 30) / 60);
-        const totalSec = Math.floor((+slider.max / 30)) % 60;
-        timeDisplay.textContent =
-            `${currentMin}:${String(currentSec).padStart(2, '0')} / ${totalMin}:${String(totalSec).padStart(2, '0')}`;
+        const cfg = getTimelineConfig();
+        const maxIdx = +slider.max;
+        const curUs = cfg ? getFrameTimestamp(index, cfg) : 0;
+        const totalUs = cfg ? getFrameTimestamp(maxIdx, cfg) : 0;
+        const curSeconds = Math.floor(curUs / 1_000_000);
+        const totalSeconds = Math.floor(totalUs / 1_000_000);
+        const currentMin = Math.floor(curSeconds / 60);
+        const currentSec = curSeconds % 60;
+        const totalMin = Math.floor(totalSeconds / 60);
+        const totalSec = totalSeconds % 60;
+        timeDisplay.textContent = `${currentMin}:${String(currentSec).padStart(2, '0')} / ${totalMin}:${String(totalSec).padStart(2, '0')}`;
 
-        const sortedVideos = [...videos].sort((a, b) => a.zIndex - b.zIndex);
+        const sortedVideos = getSortedVideos();
         const drawList = [];
         let currentSei = null;
         let currentVideoTimestamp = null;
@@ -1382,26 +1543,9 @@
                 } else {
                     console.log(`[Mobile] Decoding ${video.name} frame ${frameIdx}...`);
                     try {
-                        const decodeStart = performance.now();
-                        const frame = await decodeFrame(video, frameIdx);
-                        const decodeTime = performance.now() - decodeStart;
-                        
-                        if (frame) {
-                            console.log(`[Mobile] Decoded ${video.name} in ${decodeTime.toFixed(0)}ms`);
-                            try {
-                                bmp = await createImageBitmap(frame);
-                                cachePut(video, frameIdx, bmp);
-                                decodedAnyFrame = true;
-                            } catch (err){
-                                console.error(`[Mobile] createImageBitmap failed:`, err.message);
-                            } finally {
-                                try {
-                                    frame.close();
-                                } catch {}
-                            }
-                        } else {
-                            console.warn(`[Mobile] Decode returned null`);
-                        }
+                        await ensureFrameCached(video, frameIdx);
+                        bmp = cacheGet(video, frameIdx);
+                        if (bmp) decodedAnyFrame = true;
                     } catch (err) {
                         console.error(`[Mobile] Decode failed:`, err.message);
                     }
@@ -1438,22 +1582,8 @@
                 // Decode if cache miss (always decode during export/playback)
                 if (!bmp) {
                     if (decode) {
-                        const frame = await decodeFrame(video, frameIdx);
-                        if (frame) {
-                            try {
-                                bmp = await createImageBitmap(frame);
-                                cachePut(video, frameIdx, bmp);
-                            } catch (err) {
-                                console.error('createImageBitmap failed:', err);
-                            } finally {
-                                try {
-                                    frame.close();
-                                } catch {
-                                }
-                            }
-                        } else {
-                            console.warn(`decodeFrame returned null for ${video.name} frame ${frameIdx}`);
-                        }
+                        await ensureFrameCached(video, frameIdx);
+                        bmp = cacheGet(video, frameIdx);
                     } else {
                         // If decode=false but no cache, this will show black - try to decode anyway
                         console.warn(`Cache miss for ${video.name} frame ${frameIdx}, decode=false`);
@@ -1673,6 +1803,11 @@
                         if (video.currentOutputFrames) {
                             console.log(`[Decoder] Output frame ts=${frame.timestamp} for ${video.name}`);
                             video.currentOutputFrames.push(frame);
+                            if (video.currentOutputNotify) {
+                                const notify = video.currentOutputNotify;
+                                video.currentOutputNotify = null;
+                                try { notify(); } catch {}
+                            }
                         } else {
                             frame.close();
                         }
@@ -1688,6 +1823,7 @@
                         }
                         video.decoder = null;
                         video.lastDecodedFrame = undefined;
+                        video.currentOutputNotify = null;
                         // Clean up any frames
                         if (video.currentOutputFrames) {
                             for (const f of video.currentOutputFrames) {
@@ -1714,25 +1850,15 @@
                 console.log(`[Decoder] Decoding single frame ${frameIdx}`);
                 
                 const chunk = createChunk(video.frames[frameIdx], video.config);
-                
-                // Create promise that resolves when we get a frame output
+
                 const framePromise = new Promise((resolve) => {
-                    const checkInterval = setInterval(() => {
-                        if (outputFrames.length > 0) {
-                            clearInterval(checkInterval);
-                            resolve();
-                        }
-                    }, 5);
-                    
-                    // Timeout after 100ms
-                    setTimeout(() => {
-                        clearInterval(checkInterval);
-                        resolve();
-                    }, 100);
+                    video.currentOutputNotify = resolve;
                 });
-                
+                const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1000));
+
                 video.decoder.decode(chunk);
-                await framePromise;
+                await Promise.race([framePromise, timeoutPromise]);
+                video.currentOutputNotify = null;
                 
                 console.log(`[Decoder] Sequential decode complete, got ${outputFrames.length} frames`);
             } else {
@@ -1752,6 +1878,8 @@
             if (outputFrames.length === 0) {
                 console.error(`[Decoder] No frames decoded for ${video.name} frame ${frameIdx}`);
                 exportStatus.textContent = `DECODE FAILED: No frames output`;
+                if (video.currentOutputFrames === outputFrames) video.currentOutputFrames = null;
+                video.currentOutputNotify = null;
                 return null;
             }
             
@@ -1800,6 +1928,13 @@
             }
             video.decoder = null;
             video.lastDecodedFrame = undefined;
+            video.currentOutputNotify = null;
+            if (video.currentOutputFrames) {
+                for (const f of video.currentOutputFrames) {
+                    try { f.close(); } catch {}
+                }
+                video.currentOutputFrames = null;
+            }
             return null;
         }
     }
@@ -2241,7 +2376,10 @@
                 canvas.style.cursor = 'move';
 
                 const maxZ = Math.max(...videos.map(vid => vid.zIndex));
-                if (v.zIndex < maxZ) v.zIndex = maxZ + 1;
+                if (v.zIndex < maxZ) {
+                    v.zIndex = maxZ + 1;
+                    markSortedVideosDirty();
+                }
 
                 showFrame(currentFrameIndex, {decode: false});
                 break;

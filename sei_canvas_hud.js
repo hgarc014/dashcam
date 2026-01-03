@@ -47,6 +47,13 @@
         return fallback;
     }
 
+    function isAutopilotEngaged(state) {
+        if (!state) return false;
+        const s = String(state).trim().toUpperCase();
+        if (!s) return false;
+        return s === "1";
+    }
+
     function createCanvas(width, height) {
         if (typeof OffscreenCanvas !== "undefined") {
             return new OffscreenCanvas(width, height);
@@ -78,7 +85,7 @@
             right: pickBool(raw, ["blinkerOnRight"]),
             brake: pickBool(raw, ["brakeApplied"]),
             throttlePct: clamp(throttleRaw, 0, 100),
-            autopilotState: pickString(raw, ["autopilotState"]),
+            autopilotState: pickString(raw, ["autopilotState"], "OFF"),
             gear: gearMapping[pickString(raw?.fields?.gearState, ["displayValue"])] || "—",
             timestamp: raw?.timestamp || null
         };
@@ -193,7 +200,7 @@
 
             // --- Self-Driving label inside container ---
             const labelY = bottomY + 28;
-            if (t.autopilotState && t.autopilotState !== "OFF") {
+            if (isAutopilotEngaged(t.autopilotState)) {
                 ctx.font = "600 30px -apple-system, system-ui, sans-serif";
                 ctx.fillStyle = "rgb(85, 160, 255)";
                 ctx.textAlign = "center";
@@ -298,7 +305,7 @@
             const bottomHeight = 70;
             const labelY = bottomY + 28;
 
-            if (t.autopilotState && t.autopilotState !== "OFF") {
+            if (isAutopilotEngaged(t.autopilotState)) {
                 ctx.font = "600 30px -apple-system, system-ui, sans-serif";
                 ctx.fillStyle = "rgb(85, 160, 255)";
                 ctx.textAlign = "center";

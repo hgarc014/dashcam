@@ -583,10 +583,11 @@
                     <label>
                         Canvas Size
                         <select id="canvasSizeSelect">
+                            <option value="960x540">960 × 540 (Mobile)</option>
+                            <option value="1280x720">1280 × 720 (HD)</option>
                             <option value="1920x1080">1920 × 1080 (Full HD)</option>
                             <option value="2560x1440">2560 × 1440 (2K)</option>
                             <option value="3840x2160">3840 × 2160 (4K)</option>
-                            <option value="1280x720">1280 × 720 (HD)</option>
                         </select>
                     </label>
                     <button class="btn btn-secondary" id="applyLayoutBtn" disabled>Apply Layout</button>
@@ -750,7 +751,15 @@
     function schedulePrefetch(currentIdx) {
         const token = ++playbackPrefetchToken;
         const visibleCount = videos.filter(v => v.visible).length;
-        const ahead = isMobile ? 4 : (visibleCount > 2 ? 6 : 12);
+        // Windows: reduce prefetch to avoid overwhelming the decoder
+        let ahead;
+        if (isMobile) {
+            ahead = 4;
+        } else if (isWindowsDesktop) {
+            ahead = visibleCount > 2 ? 4 : 8;  // Less aggressive on Windows
+        } else {
+            ahead = visibleCount > 2 ? 6 : 12;  // More aggressive on Mac/other
+        }
         const start = currentIdx + 1;
         const end = currentIdx + ahead;
 
@@ -1334,6 +1343,14 @@
     let draggingCropMarker = null;
 
     const isMacDesktop = /Macintosh|Mac OS X/i.test(navigator.userAgent) && !/iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const isWindowsDesktop = /Windows|Win32|Win64/i.test(navigator.userAgent);
+
+    // Log platform detection
+    console.log('[Platform Detection]', {
+        isMac: isMacDesktop,
+        isWindows: isWindowsDesktop,
+        userAgent: navigator.userAgent.substring(0, 100)
+    });
 
     function pickFirstSupportedMimeType(candidates) {
         for (const t of candidates) {
@@ -1363,7 +1380,25 @@
     // Mobile detection
     const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const isMobile = isMobileDevice || window.innerWidth <= 768;
-    
+
+    // Check VideoDecoder support
+    const hasVideoDecoder = typeof VideoDecoder !== 'undefined';
+    const hasVideoFrame = typeof VideoFrame !== 'undefined';
+    const canUseWebCodecs = hasVideoDecoder && hasVideoFrame;
+
+    console.log('[WebCodecs Support]', {
+        hasVideoDecoder,
+        hasVideoFrame,
+        canUseWebCodecs,
+        isMobile: isMobileDevice,
+        userAgent: navigator.userAgent.substring(0, 100)
+    });
+
+    if (!canUseWebCodecs) {
+        console.error('[Fatal] VideoDecoder not supported in this browser. Playback will not work.');
+        alert('Your browser does not support VideoDecoder API.\n\nPlease use:\n- Chrome 94+ on desktop\n- Chrome 108+ on Android\n- Safari 16.4+ on iOS\n\nNote: Mobile support is limited and may require a newer device.');
+    }
+
     // Debug Panel Setup
     const debugPanel = $('debugPanel');
     const debugOutput = $('debugOutput');
@@ -1451,7 +1486,8 @@
     setTimeout(() => { if (exportStatus.textContent.includes('Mobile:')) exportStatus.textContent = ''; }, 5000);
 
     // ---------- ImageBitmap cache (LRU, adjust for video count) ----------
-    const MAX_CACHE_PER_VIDEO = isMobile ? 24 : 60;
+    // Windows: Use smaller cache to reduce memory pressure and improve playback stability
+    const MAX_CACHE_PER_VIDEO = isMobile ? 24 : (isWindowsDesktop ? 40 : 60);
 
     function getBitmapCacheKey(video) {
         const w = Math.max(1, Math.round(video.width || 1));
@@ -1720,10 +1756,28 @@
         for (const file of files) await loadVideo(file);
 
         if (videos.length) {
+            // Auto-select appropriate canvas size for mobile
+            if (isMobileDevice && videos.length === 1) {
+                // First time loading on mobile - set to mobile size
+                const currentValue = canvasSizeSelect.value;
+                if (currentValue === '1920x1080') {  // Default value
+                    canvasSizeSelect.value = '960x540';
+                    console.log('[Mobile] Auto-selected 960x540 canvas size for better performance');
+                }
+            }
+
             applyCanvasSize();
             applyLayout(); // Re-layout videos after canvas is properly sized
             setupControls();
             dropOverlay.classList.add('hidden');
+
+            if (isMobileDevice) {
+                exportStatus.textContent = '📱 Mobile: Use 960x540 canvas for best performance';
+                exportStatus.style.color = '#2196F3';
+                setTimeout(() => {
+                    if (exportStatus.textContent.includes('Mobile:')) exportStatus.textContent = '';
+                }, 5000);
+            }
         }
     }
 
@@ -2075,13 +2129,13 @@
         let frameTime = 0;
         
         try {
-            // Add timeout to prevent infinite hangs - shorter on mobile
-            const timeoutDuration = isMobile ? 1000 : 5000;
+            // Add timeout to prevent infinite hangs - longer on mobile since they're slower
+            const timeoutDuration = isMobile ? 8000 : 5000;
             const framePromise = showFrame(currentFrameIndex, {decode: true});
-            const timeoutPromise = new Promise((_, reject) => 
+            const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Frame decode timeout')), timeoutDuration)
             );
-            
+
             await Promise.race([framePromise, timeoutPromise]);
 
             frameTime = performance.now() - frameStart;
@@ -2465,13 +2519,45 @@
 
                 if (DEBUG) console.log(`[Decoder] Configuring ${video.name}: codec=${video.config.codec}, size=${video.config.width}x${video.config.height}`);
                 const description = buildAvcCDescription(video.config.sps, video.config.pps);
-                video.decoder.configure({
-                    codec: video.config.codec,
-                    codedWidth: video.config.width,
-                    codedHeight: video.config.height,
-                    description: description
-                });
-                if (DEBUG) console.log(`[Decoder] Configuration complete for ${video.name}`);
+
+                // Try to configure with hardware acceleration first
+                try {
+                    const decoderConfig = {
+                        codec: video.config.codec,
+                        codedWidth: video.config.width,
+                        codedHeight: video.config.height,
+                        description: description
+                    };
+
+                    // Add hardware acceleration if not mobile (mobile often has issues with this setting)
+                    if (!isMobileDevice) {
+                        decoderConfig.hardwareAcceleration = 'prefer-hardware';
+                        decoderConfig.optimizeForLatency = true;
+                    } else {
+                        // Mobile: use default hardware behavior (no explicit preference)
+                        console.log(`[Mobile Decoder] Using default hardware acceleration for ${video.name}`);
+                    }
+
+                    video.decoder.configure(decoderConfig);
+                    if (DEBUG) console.log(`[Decoder] Configuration complete for ${video.name} (${isMobileDevice ? 'mobile mode' : 'with hardware acceleration'})`);
+                } catch (e) {
+                    // Fallback to minimal configuration
+                    console.warn(`[Decoder] Initial configuration failed for ${video.name}, trying minimal config`, e);
+                    if (isWindowsDesktop) {
+                        console.warn(`[Windows] Software decoding may be slower. Consider updating graphics drivers for better performance.`);
+                    }
+                    if (isMobileDevice) {
+                        console.warn(`[Mobile] Decoder configuration failed. Your device may not support this video resolution (${video.config.width}x${video.config.height}).`);
+                    }
+
+                    video.decoder.configure({
+                        codec: video.config.codec,
+                        codedWidth: video.config.width,
+                        codedHeight: video.config.height,
+                        description: description
+                    });
+                    if (DEBUG) console.log(`[Decoder] Configuration complete for ${video.name} (fallback/minimal mode)`);
+                }
             }
 
             if (isSequential) {
@@ -2483,7 +2569,9 @@
                 const framePromise = new Promise((resolve) => {
                     video.currentOutputNotify = resolve;
                 });
-                const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1000));
+                // Mobile devices need more time to decode
+                const decodeTimeout = isMobileDevice ? 3000 : 1000;
+                const timeoutPromise = new Promise((resolve) => setTimeout(resolve, decodeTimeout));
 
                 video.decoder.decode(chunk);
                 await Promise.race([framePromise, timeoutPromise]);

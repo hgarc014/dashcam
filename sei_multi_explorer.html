@@ -583,9 +583,9 @@
                     <label>
                         Canvas Size
                         <select id="canvasSizeSelect">
-                            <option value="960x540">960 × 540 (Mobile)</option>
+                            <option value="1920x1080" selected>1920 × 1080 (Full HD)</option>
                             <option value="1280x720">1280 × 720 (HD)</option>
-                            <option value="1920x1080">1920 × 1080 (Full HD)</option>
+                            <option value="960x540">960 × 540 (Mobile)</option>
                             <option value="2560x1440">2560 × 1440 (2K)</option>
                             <option value="3840x2160">3840 × 2160 (4K)</option>
                         </select>
@@ -1753,11 +1753,13 @@
             return;
         }
 
+        const wasEmpty = videos.length === 0;
+
         for (const file of files) await loadVideo(file);
 
         if (videos.length) {
-            // Auto-select appropriate canvas size for mobile
-            if (isMobileDevice && videos.length === 1) {
+            // Auto-select appropriate canvas size for mobile (only on first load)
+            if (isMobileDevice && wasEmpty && videos.length === 1) {
                 // First time loading on mobile - set to mobile size
                 const currentValue = canvasSizeSelect.value;
                 if (currentValue === '1920x1080') {  // Default value
@@ -1771,7 +1773,7 @@
             setupControls();
             dropOverlay.classList.add('hidden');
 
-            if (isMobileDevice) {
+            if (isMobileDevice && wasEmpty) {
                 exportStatus.textContent = '📱 Mobile: Use 960x540 canvas for best performance';
                 exportStatus.style.color = '#2196F3';
                 setTimeout(() => {
